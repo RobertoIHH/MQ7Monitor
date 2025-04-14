@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.json.JSONException
 import org.json.JSONObject
 
 class GasSensorViewModel : ViewModel() {
@@ -23,8 +24,8 @@ class GasSensorViewModel : ViewModel() {
     private val _isScanning = mutableStateOf(false)
     val isScanning: State<Boolean> = _isScanning
 
-    private val _deviceList = mutableStateListOf<DeviceInfo>()
-    val deviceList: List<DeviceInfo> = _deviceList
+    // Esta es la clave: usar mutableStateListOf y exponerlo directamente
+    val deviceList = mutableStateListOf<DeviceInfo>()
 
     private val _selectedDevice = mutableStateOf<BluetoothDevice?>(null)
     val selectedDevice: State<BluetoothDevice?> = _selectedDevice
@@ -40,11 +41,13 @@ class GasSensorViewModel : ViewModel() {
     val ppmValue: State<Int> = _ppmValue
 
     // Datos para el gráfico
-    private val _chartData = mutableStateListOf<DataPoint>()
-    val chartData: List<DataPoint> = _chartData
+    val chartData = mutableStateListOf<DataPoint>()
 
     private var bleManager: BLEManager? = null
     private val dataManager = SensorDataManager()
+
+    // Conjunto para asegurar que no hay duplicados
+    private val addedDeviceAddresses = mutableSetOf<String>()
 
     fun setBleManager(manager: BLEManager) {
         bleManager = manager
@@ -58,14 +61,17 @@ class GasSensorViewModel : ViewModel() {
 
                     Log.d("GasSensorViewModel", "Dispositivo encontrado en ViewModel: $deviceName, $deviceAddress, RSSI: $rssi")
 
-                    // Importante: Actualizar la UI en el hilo principal
-                    viewModelScope.launch(Dispatchers.Main) {
-                        // Verificar si ya existe el dispositivo
-                        val exists = _deviceList.any { it.address == deviceAddress }
-                        if (!exists) {
-                            Log.d("GasSensorViewModel", "Añadiendo dispositivo a la lista: $deviceName")
-                            _deviceList.add(DeviceInfo(deviceName, deviceAddress, rssi))
-                            Log.d("GasSensorViewModel", "Lista actual: ${_deviceList.size} dispositivos")
+                    // Verificar si ya existe el dispositivo para evitar duplicados
+                    if (!addedDeviceAddresses.contains(deviceAddress)) {
+                        Log.d("GasSensorViewModel", "Añadiendo dispositivo a la lista: $deviceName")
+
+                        // Añadir al conjunto para control de duplicados
+                        addedDeviceAddresses.add(deviceAddress)
+
+                        // Importante: Actualizar la UI en el hilo principal
+                        viewModelScope.launch(Dispatchers.Main) {
+                            deviceList.add(DeviceInfo(deviceName, deviceAddress, rssi))
+                            Log.d("GasSensorViewModel", "Lista actual en ViewModel: ${deviceList.size} dispositivos")
                         }
                     }
                 } catch (e: Exception) {
@@ -76,31 +82,49 @@ class GasSensorViewModel : ViewModel() {
 
             override fun onDataReceived(data: String) {
                 try {
-                    val jsonData = JSONObject(data)
-                    val rawValue = jsonData.getInt("gas")
-                    val voltage = jsonData.getDouble("voltage")
+                    Log.d("GasSensorViewModel", "Datos JSON completos recibidos: $data")
 
-                    dataManager.updateData(rawValue, voltage)
-
-                    // Actualizar en el hilo principal
-                    viewModelScope.launch {
-                        _rawValue.value = dataManager.rawValue
-                        _voltage.value = dataManager.voltage
-                        _ppmValue.value = dataManager.estimatedPpm
-
-                        // Actualizar datos del gráfico
-                        if (_chartData.size >= 60) {
-                            _chartData.removeAt(0)
-                        }
-                        _chartData.add(DataPoint(_chartData.size.toFloat(), rawValue.toFloat()))
+                    // Validar que el JSON esté completo
+                    if (!data.startsWith("{") || !data.endsWith("}")) {
+                        Log.e("GasSensorViewModel", "JSON incompleto: $data")
+                        return
                     }
+
+                    val jsonData = JSONObject(data)
+
+                    if (jsonData.has("g") && jsonData.has("V")) {
+                        val rawValue = jsonData.getInt("g")
+                        val voltage = jsonData.getDouble("V")
+
+                        Log.d("GasSensorViewModel", "Datos procesados: gas=$rawValue, voltage=$voltage")
+
+                        dataManager.updateData(rawValue, voltage)
+
+                        // Actualizar en el hilo principal
+                        viewModelScope.launch(Dispatchers.Main) {
+                            _rawValue.value = dataManager.rawValue
+                            _voltage.value = dataManager.voltage
+                            _ppmValue.value = dataManager.estimatedPpm
+
+                            // Actualizar datos del gráfico
+                            if (chartData.size >= 60) {
+                                chartData.removeAt(0)
+                            }
+                            chartData.add(DataPoint(chartData.size.toFloat(), rawValue.toFloat()))
+                        }
+                    } else {
+                        Log.e("GasSensorViewModel", "JSON no contiene los campos esperados: $data")
+                    }
+                } catch (e: JSONException) {
+                    Log.e("GasSensorViewModel", "Error al procesar JSON: ${e.message}\nJSON: $data")
                 } catch (e: Exception) {
                     Log.e("GasSensorViewModel", "Error al procesar los datos: ${e.message}")
                 }
             }
 
             override fun onConnectionStateChange(connected: Boolean) {
-                viewModelScope.launch {
+                viewModelScope.launch(Dispatchers.Main) {
+                    Log.d("GasSensorViewModel", "Estado de conexión cambiado a: $connected")
                     _isConnected.value = connected
                     _connectionStatus.value = if (connected) "Conectado" else "Desconectado"
                 }
@@ -110,8 +134,19 @@ class GasSensorViewModel : ViewModel() {
 
     fun startScan() {
         Log.d("GasSensorViewModel", "Iniciando escaneo...")
-        _deviceList.clear()
-        _isScanning.value = true
+
+        // Ejecutar en el hilo principal
+        viewModelScope.launch(Dispatchers.Main) {
+            // Limpiar lista y conjunto antes de comenzar nuevo escaneo
+            deviceList.clear()
+            addedDeviceAddresses.clear()
+
+            // Actualizar estado de escaneo
+            _isScanning.value = true
+
+            // Log después de limpiar
+            Log.d("GasSensorViewModel", "Lista limpiada, ahora tiene ${deviceList.size} dispositivos")
+        }
 
         // Asegurarse de que el bleManager no sea nulo
         if (bleManager == null) {
@@ -120,6 +155,7 @@ class GasSensorViewModel : ViewModel() {
             return
         }
 
+        // Iniciar escaneo BLE
         bleManager?.scanForDevices()
         Log.d("GasSensorViewModel", "Escaneo iniciado, lista limpiada")
 
@@ -127,16 +163,18 @@ class GasSensorViewModel : ViewModel() {
         viewModelScope.launch {
             delay(30000)
             if (_isScanning.value) {
-                _isScanning.value = false
+                stopScan()
                 Log.d("GasSensorViewModel", "Escaneo detenido después de 30 segundos")
             }
         }
     }
 
     fun stopScan() {
-        bleManager?.stopScan()
-        _isScanning.value = false
-        Log.d("GasSensorViewModel", "Escaneo detenido manualmente")
+        viewModelScope.launch(Dispatchers.Main) {
+            bleManager?.stopScan()
+            _isScanning.value = false
+            Log.d("GasSensorViewModel", "Escaneo detenido. Lista tiene ${deviceList.size} dispositivos.")
+        }
     }
 
     fun selectDevice(device: DeviceInfo) {

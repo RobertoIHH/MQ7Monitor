@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -27,18 +28,19 @@ import androidx.compose.ui.unit.sp
 fun SensorGasApp(
     viewModel: GasSensorViewModel,
     onScanClick: () -> Unit
-
 ) {
     val isConnected by viewModel.isConnected
     val connectionStatus by viewModel.connectionStatus
     val isScanning by viewModel.isScanning
-    val deviceList by remember { derivedStateOf { viewModel.deviceList } }
     val selectedDevice by viewModel.selectedDevice
 
-    val rawValue by viewModel.rawValue
-    val voltage by viewModel.voltage
-    val ppmValue by viewModel.ppmValue
-    val chartData by remember { derivedStateOf { viewModel.chartData } }
+    // Importante: Usar DisposableEffect para efectos al montar y desmontar la composable
+    DisposableEffect(Unit) {
+        Log.d("SensorGasApp", "Componente SensorGasApp inicializado")
+        onDispose {
+            Log.d("SensorGasApp", "Componente SensorGasApp destruido")
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -62,8 +64,7 @@ fun SensorGasApp(
             Button(
                 onClick = {
                     Log.d("SensorGasApp", "Botón de escaneo presionado")
-                    viewModel.startScan() // Primero inicia el escaneo en el ViewModel
-                    onScanClick() // Luego solicita permisos si es necesario
+                    onScanClick() // Primero solicitar permisos si es necesario
                 },
                 modifier = Modifier.weight(1f),
                 enabled = !isScanning,
@@ -109,6 +110,7 @@ fun SensorGasApp(
                 color = if (isConnected) Color.Green else Color.Red
             )
         }
+
         //lista Disp
         Text(
             text = "Dispositivos disponibles:",
@@ -124,9 +126,8 @@ fun SensorGasApp(
             )
         }
 
-// Añadir un log para depurar
-        val devices = deviceList
-        Log.d("SensorGasApp", "Renderizando ${devices.size} dispositivos")
+        // Imprimir log de dispositivos encontrados
+        Log.d("SensorGasApp", "Renderizando ${viewModel.deviceList.size} dispositivos")
 
         Box(
             modifier = Modifier
@@ -135,7 +136,7 @@ fun SensorGasApp(
                 .border(1.dp, Color.LightGray, RoundedCornerShape(4.dp))
                 .background(Color(0xFFF0F0F0))
         ) {
-            if (devices.isEmpty()) {
+            if (viewModel.deviceList.isEmpty()) {
                 // Mostrar mensaje si no hay dispositivos
                 Text(
                     text = if (isScanning) "Buscando dispositivos..." else "No se encontraron dispositivos",
@@ -146,17 +147,23 @@ fun SensorGasApp(
                 )
             } else {
                 // Mostrar la lista de dispositivos encontrados
-                LazyColumn {
-                    items(devices) { device ->
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(viewModel.deviceList) { device ->
                         DeviceItem(
                             deviceInfo = device,
                             isSelected = selectedDevice?.address == device.address,
-                            onClick = { viewModel.selectDevice(device) }
+                            onClick = {
+                                Log.d("SensorGasApp", "Dispositivo seleccionado: ${device.name}")
+                                viewModel.selectDevice(device)
+                            }
                         )
                     }
                 }
             }
         }
+
         // Datos del sensor
         Card(
             modifier = Modifier
@@ -173,6 +180,10 @@ fun SensorGasApp(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
+
+                val rawValue by viewModel.rawValue
+                val voltage by viewModel.voltage
+                val ppmValue by viewModel.ppmValue
 
                 Text(text = "Valor: $rawValue")
                 Text(text = "Voltaje: ${String.format("%.2f", voltage)} V")
@@ -194,8 +205,8 @@ fun SensorGasApp(
                 .border(1.dp, Color.LightGray, RoundedCornerShape(4.dp))
                 .padding(8.dp)
         ) {
-            if (chartData.isNotEmpty()) {
-                LineChart(dataPoints = chartData)
+            if (viewModel.chartData.isNotEmpty()) {
+                LineChart(dataPoints = viewModel.chartData)
             } else {
                 Text(
                     text = "Esperando datos...",
@@ -218,18 +229,36 @@ fun DeviceItem(
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .background(if (isSelected) Color(0xFFE3F2FD) else Color.Transparent)
-            .padding(8.dp),
+            .padding(12.dp), // Aumentado para mejor visualización
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(text = deviceInfo.name, fontWeight = FontWeight.Bold)
-            Text(text = deviceInfo.address, fontSize = 12.sp)
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp)
+        ) {
+            Text(
+                text = deviceInfo.name,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = deviceInfo.address,
+                fontSize = 12.sp,
+                color = Color.Gray,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
-        Text(text = "RSSI: ${deviceInfo.rssi} dBm", fontSize = 12.sp)
+        Text(
+            text = "RSSI: ${deviceInfo.rssi} dBm",
+            fontSize = 12.sp,
+            color = if (deviceInfo.rssi > -60) Color.Green else if (deviceInfo.rssi > -80) Color.Blue else Color.Red
+        )
     }
 }
-
-
 
 @Composable
 fun LineChart(dataPoints: List<DataPoint>) {

@@ -19,13 +19,12 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 
-class BLEManager(private val context: Context, callbacks: BLECallbacks) {
+class BLEManager(private val context: Context, private var callbacks: BLECallbacks) {
     companion object {
         private const val TAG = "BLEManager"
 
@@ -37,13 +36,13 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
         private const val SCAN_PERIOD = 30000L // 30 segundos
     }
 
-    private var callbacks: BLECallbacks = callbacks
     private var bluetoothAdapter: BluetoothAdapter
     private var scanner: BluetoothLeScanner? = null
     private var bluetoothGatt: BluetoothGatt? = null
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
     private val scanHandler = Handler(Looper.getMainLooper())
     private var isScanning = false
+    private var dataBuffer = StringBuilder()  // Buffer para acumular datos fragmentados
 
     // Mantener un mapa de dispositivos
     private val deviceMap = mutableMapOf<String, BluetoothDevice>()
@@ -81,14 +80,8 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build()
 
-            // Filtros opcionales - puedes filtrar por servicio UUID específico
+            // No usar filtros para encontrar todos los dispositivos
             val filters = mutableListOf<ScanFilter>()
-
-            val filter = ScanFilter.Builder()
-                .setServiceUuid(ParcelUuid(SERVICE_UUID))
-                .build()
-            filters.add(filter)
-
 
             // Detener el escaneo después de un período definido
             scanHandler.postDelayed({ stopScan() }, SCAN_PERIOD)
@@ -133,12 +126,18 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             super.onScanResult(callbackType, result)
             result.device?.let { device ->
-                // Imprimir información del dispositivo para depuración
+                // Incluir dispositivos sin nombre
                 val deviceName = device.name ?: "Desconocido"
-                Log.d(TAG, "Dispositivo encontrado: $deviceName, dirección: ${device.address}, RSSI: ${result.rssi}")
+                val deviceAddress = device.address
 
-                deviceMap[device.address] = device
-                callbacks.onDeviceFound(device, result.rssi)
+                // Guardar el dispositivo en el mapa
+                deviceMap[deviceAddress] = device
+
+                // Informar del dispositivo encontrado desde el hilo principal
+                Handler(Looper.getMainLooper()).post {
+                    Log.d(TAG, "Dispositivo encontrado: $deviceName, dirección: $deviceAddress, RSSI: ${result.rssi}")
+                    callbacks.onDeviceFound(device, result.rssi)
+                }
             }
         }
 
@@ -158,6 +157,9 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
 
     fun connectToDevice(device: BluetoothDevice) {
         try {
+            // Limpiar buffer al iniciar una nueva conexión
+            dataBuffer.clear()
+
             if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
                 == PackageManager.PERMISSION_GRANTED) {
                 bluetoothGatt = device.connectGatt(context, false, gattCallback)
@@ -180,6 +182,11 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
                 bluetoothGatt?.close()
                 bluetoothGatt = null
                 Log.d(TAG, "Desconectado")
+
+                // Notificar desconexión explícitamente
+                Handler(Looper.getMainLooper()).post {
+                    callbacks.onConnectionStateChange(false)
+                }
             }
         } catch (e: SecurityException) {
             Log.e(TAG, "Error de seguridad al desconectar: ${e.message}")
@@ -202,10 +209,16 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
                 } catch (e: SecurityException) {
                     Log.e(TAG, "Error al descubrir servicios: ${e.message}")
                 }
-                callbacks.onConnectionStateChange(true)
+                // Notificar en el hilo principal
+                Handler(Looper.getMainLooper()).post {
+                    callbacks.onConnectionStateChange(true)
+                }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d(TAG, "Desconectado del dispositivo GATT")
-                callbacks.onConnectionStateChange(false)
+                // Notificar en el hilo principal
+                Handler(Looper.getMainLooper()).post {
+                    callbacks.onConnectionStateChange(false)
+                }
             }
         }
 
@@ -273,8 +286,7 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 if (CHARACTERISTIC_UUID == characteristic.uuid) {
                     val data = String(value, StandardCharsets.UTF_8)
-                    Log.d(TAG, "Datos recibidos: $data")
-                    callbacks.onDataReceived(data)
+                    processReceivedData(data)
                 }
             }
         }
@@ -287,12 +299,52 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
                 val data = characteristic.value
                 if (data != null && data.isNotEmpty()) {
                     val dataString = String(data, StandardCharsets.UTF_8)
-                    Log.d(TAG, "Datos recibidos: $dataString")
-                    callbacks.onDataReceived(dataString)
+                    processReceivedData(dataString)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error al procesar datos: ${e.message}")
             }
+        }
+    }
+
+    // Método para procesar datos potencialmente fragmentados
+    private fun processReceivedData(dataFragment: String) {
+        try {
+            Log.d(TAG, "Datos recibidos: $dataFragment")
+
+            // Añadir el fragmento al buffer
+            dataBuffer.append(dataFragment)
+
+            // Verificar si el buffer contiene un JSON completo
+            val bufferStr = dataBuffer.toString()
+
+            // Comprobar si el JSON está completo (tiene llaves de apertura y cierre)
+            if (bufferStr.startsWith("{") && bufferStr.endsWith("}")) {
+                // JSON completo, procesar
+                Handler(Looper.getMainLooper()).post {
+                    callbacks.onDataReceived(bufferStr)
+                }
+                // Limpiar buffer después de procesar
+                dataBuffer.clear()
+            } else if (bufferStr.contains("}{")) {
+                // Llegaron múltiples JSON juntos, separar y procesar el primero
+                val split = bufferStr.indexOf("}{")
+                val firstJson = bufferStr.substring(0, split + 1)
+
+                Handler(Looper.getMainLooper()).post {
+                    callbacks.onDataReceived(firstJson)
+                }
+
+                // Conservar el resto para próximos fragmentos
+                dataBuffer.clear()
+                dataBuffer.append(bufferStr.substring(split + 1))
+            }
+            // Si no está completo, seguir acumulando
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error al procesar fragmento de datos: ${e.message}")
+            // Limpiar buffer en caso de error
+            dataBuffer.clear()
         }
     }
 }

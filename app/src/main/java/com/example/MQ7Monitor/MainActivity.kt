@@ -27,12 +27,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var bluetoothManager: BluetoothManager
     private lateinit var bluetoothAdapter: BluetoothAdapter
     private lateinit var bleManager: BLEManager
+    private var viewModel: GasSensorViewModel? = null
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val allGranted = permissions.entries.all { it.value }
         if (allGranted) {
+            Log.d("MainActivity", "Todos los permisos concedidos, iniciando escaneo")
             startBleScan()
         } else {
             Log.e("MainActivity", "No se concedieron los permisos necesarios")
@@ -57,6 +59,7 @@ class MainActivity : ComponentActivity() {
         bleManager = BLEManager(this, object : BLEManager.BLECallbacks {
             override fun onDeviceFound(device: BluetoothDevice, rssi: Int) {
                 // Se manejará en el ViewModel
+                Log.d("MainActivity", "Dispositivo encontrado: ${device.name ?: "Desconocido"}, pasando a ViewModel")
             }
 
             override fun onDataReceived(data: String) {
@@ -70,22 +73,28 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MQ7MonitorTheme {
-                val viewModel: GasSensorViewModel = viewModel()
+                val viewModelInstance: GasSensorViewModel = viewModel()
+                this.viewModel = viewModelInstance
 
                 // Pasar el BLEManager al ViewModel
                 LaunchedEffect(Unit) {
-                    viewModel.setBleManager(bleManager)
+                    viewModelInstance.setBleManager(bleManager)
+                    Log.d("MainActivity", "BLEManager configurado en el ViewModel")
                 }
 
                 SensorGasApp(
-                    viewModel = viewModel,
-                    onScanClick = { checkPermissionsAndScan() }
+                    viewModel = viewModelInstance,
+                    onScanClick = {
+                        Log.d("MainActivity", "Botón de escaneo tocado en la UI")
+                        checkPermissionsAndScan()
+                    }
                 )
             }
         }
     }
 
     private fun checkPermissionsAndScan() {
+        Log.d("MainActivity", "Verificando permisos para escaneo BLE")
         val requiredPermissions = mutableListOf<String>()
 
         // Verificar permisos de Bluetooth
@@ -116,11 +125,13 @@ class MainActivity : ComponentActivity() {
         }
 
         if (requiredPermissions.isNotEmpty()) {
+            Log.d("MainActivity", "Solicitando permisos: ${requiredPermissions.joinToString()}")
             requestPermissionLauncher.launch(requiredPermissions.toTypedArray())
         } else {
             // Verificar si Bluetooth está habilitado antes de iniciar el escaneo
             if (!bluetoothAdapter.isEnabled) {
                 // Solicitar al usuario que active Bluetooth
+                Log.d("MainActivity", "Bluetooth no está habilitado, solicitando activación")
                 val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
                 if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
                     == PackageManager.PERMISSION_GRANTED) {
@@ -128,6 +139,7 @@ class MainActivity : ComponentActivity() {
                     return
                 }
             } else {
+                Log.d("MainActivity", "Todos los permisos concedidos y Bluetooth activo, iniciando escaneo")
                 startBleScan()
             }
         }
@@ -141,6 +153,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        Log.d("MainActivity", "Iniciando escaneo desde MainActivity")
         bleManager.scanForDevices()
     }
 
@@ -148,5 +161,6 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         bleManager.disconnect()
         bleManager.stopScan()
+        Log.d("MainActivity", "Actividad destruida, escáner y conexiones detenidas")
     }
 }
