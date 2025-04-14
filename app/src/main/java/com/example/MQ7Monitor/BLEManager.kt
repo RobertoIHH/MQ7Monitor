@@ -1,4 +1,4 @@
-package com.example.sensorgas
+package com.example.MQ7Monitor
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter

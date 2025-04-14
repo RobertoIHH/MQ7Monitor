@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.sensorgas"
+    namespace = "com.example.MQ7Monitor"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.sensorgas"
+        applicationId = "com.example.MQ7Monitor"
         minSdk = 25
         targetSdk = 35
         versionCode = 1

@@ -1,4 +1,4 @@
-package com.example.sensorgas
+package com.example.MQ7Monitor
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.MQ7Monitor.ui.theme.MQ7MonitorTheme
 
 class MainActivity : ComponentActivity() {
     private lateinit var bluetoothManager: BluetoothManager
@@ -63,7 +64,7 @@ class MainActivity : ComponentActivity() {
         })
 
         setContent {
-            SensorGasTheme {
+            MQ7MonitorTheme {
                 val viewModel: GasSensorViewModel = viewModel()
 
                 // Pasar el BLEManager al ViewModel
