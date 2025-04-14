@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 fun SensorGasApp(
     viewModel: GasSensorViewModel,
     onScanClick: () -> Unit
+
 ) {
     val isConnected by viewModel.isConnected
     val connectionStatus by viewModel.connectionStatus
@@ -195,6 +196,8 @@ fun DeviceItem(
         Text(text = "RSSI: ${deviceInfo.rssi} dBm", fontSize = 12.sp)
     }
 }
+
+
 
 @Composable
 fun LineChart(dataPoints: List<DataPoint>) {

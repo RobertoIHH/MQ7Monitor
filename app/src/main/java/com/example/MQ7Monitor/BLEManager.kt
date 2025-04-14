@@ -83,12 +83,12 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
 
             // Filtros opcionales - puedes filtrar por servicio UUID específico
             val filters = mutableListOf<ScanFilter>()
-            /*
+
             val filter = ScanFilter.Builder()
                 .setServiceUuid(ParcelUuid(SERVICE_UUID))
                 .build()
             filters.add(filter)
-            */
+
 
             // Detener el escaneo después de un período definido
             scanHandler.postDelayed({ stopScan() }, SCAN_PERIOD)
@@ -133,6 +133,10 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             super.onScanResult(callbackType, result)
             result.device?.let { device ->
+                // Imprimir información del dispositivo para depuración
+                val deviceName = device.name ?: "Desconocido"
+                Log.d(TAG, "Dispositivo encontrado: $deviceName, dirección: ${device.address}, RSSI: ${result.rssi}")
+
                 deviceMap[device.address] = device
                 callbacks.onDeviceFound(device, result.rssi)
             }
@@ -140,6 +144,15 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
 
         override fun onScanFailed(errorCode: Int) {
             Log.e(TAG, "Escaneo BLE fallido con código de error: $errorCode")
+            // Proporcionar más información sobre el error
+            val reason = when (errorCode) {
+                ScanCallback.SCAN_FAILED_ALREADY_STARTED -> "Escaneo ya iniciado"
+                ScanCallback.SCAN_FAILED_APPLICATION_REGISTRATION_FAILED -> "Fallo registro aplicación"
+                ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED -> "Característica no soportada"
+                ScanCallback.SCAN_FAILED_INTERNAL_ERROR -> "Error interno"
+                else -> "Error desconocido"
+            }
+            Log.e(TAG, "Razón: $reason")
         }
     }
 

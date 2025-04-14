@@ -23,6 +23,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var bluetoothAdapter: BluetoothAdapter
     private lateinit var bleManager: BLEManager
 
+
+
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -113,7 +115,18 @@ class MainActivity : ComponentActivity() {
         if (requiredPermissions.isNotEmpty()) {
             requestPermissionLauncher.launch(requiredPermissions.toTypedArray())
         } else {
-            startBleScan()
+            // Verificar si Bluetooth está habilitado antes de iniciar el escaneo
+            if (!bluetoothAdapter.isEnabled) {
+                // Solicitar al usuario que active Bluetooth
+                val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                    == PackageManager.PERMISSION_GRANTED) {
+                    startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT)
+                    return
+                }
+            } else {
+                startBleScan()
+            }
         }
     }
 
