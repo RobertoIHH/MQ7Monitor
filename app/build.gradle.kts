@@ -57,9 +57,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.compose.runtime:runtime-livedata:1.6.1")
 
-    // Dependencias para gráficos (si no están incluidas en las libs)
-    implementation("com.github.PhilJay:MPAndroidChart:v3.1.0") // Si decides usar MPAndroidChart en lugar de Canvas
-
     // Test dependencies
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

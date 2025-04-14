@@ -1,4 +1,4 @@
-package com.example.sensorgas
+package com.example.MQ7Monitor
 
 import android.bluetooth.BluetoothDevice
 import androidx.compose.runtime.State

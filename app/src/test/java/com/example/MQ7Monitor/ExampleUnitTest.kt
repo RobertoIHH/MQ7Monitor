@@ -1,4 +1,4 @@
-package com.example.sensorgas
+package com.example.MQ7Monitor
 
 import org.junit.Test
 

@@ -1,20 +1,27 @@
 package com.example.sensorgas
 
+import android.Manifest
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
-import android.bluetooth.BluetoothGattService
+import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelUuid
 import android.util.Log
+import androidx.core.app.ActivityCompat
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 
@@ -31,6 +38,7 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
     }
 
     private var callbacks: BLECallbacks = callbacks
+    private var bluetoothAdapter: BluetoothAdapter
     private var scanner: BluetoothLeScanner? = null
     private var bluetoothGatt: BluetoothGatt? = null
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
@@ -39,6 +47,11 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
 
     // Mantener un mapa de dispositivos
     private val deviceMap = mutableMapOf<String, BluetoothDevice>()
+
+    init {
+        val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        bluetoothAdapter = bluetoothManager.adapter
+    }
 
     interface BLECallbacks {
         fun onDeviceFound(device: BluetoothDevice, rssi: Int)
@@ -51,8 +64,7 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
     }
 
     fun scanForDevices() {
-        val bluetoothAdapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
-        scanner = bluetoothAdapter?.bluetoothLeScanner
+        scanner = bluetoothAdapter.bluetoothLeScanner
 
         if (scanner == null) {
             Log.e(TAG, "BluetoothLE scanner no disponible")
@@ -64,14 +76,35 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
         }
 
         try {
+            // Configuración del escaneo
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+
+            // Filtros opcionales - puedes filtrar por servicio UUID específico
+            val filters = mutableListOf<ScanFilter>()
+            /*
+            val filter = ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid(SERVICE_UUID))
+                .build()
+            filters.add(filter)
+            */
+
             // Detener el escaneo después de un período definido
             scanHandler.postDelayed({ stopScan() }, SCAN_PERIOD)
 
             isScanning = true
-            scanner?.startScan(scanCallback)
-            Log.d(TAG, "Escaneo BLE iniciado")
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN)
+                == PackageManager.PERMISSION_GRANTED) {
+                scanner?.startScan(filters, settings, scanCallback)
+                Log.d(TAG, "Escaneo BLE iniciado")
+            } else {
+                Log.e(TAG, "Permiso BLUETOOTH_SCAN no concedido")
+            }
         } catch (e: SecurityException) {
             Log.e(TAG, "Error de seguridad al escanear: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error al iniciar escaneo: ${e.message}")
         }
     }
 
@@ -79,10 +112,15 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
         if (isScanning && scanner != null) {
             try {
                 isScanning = false
-                scanner?.stopScan(scanCallback)
-                Log.d(TAG, "Escaneo BLE detenido")
+                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN)
+                    == PackageManager.PERMISSION_GRANTED) {
+                    scanner?.stopScan(scanCallback)
+                    Log.d(TAG, "Escaneo BLE detenido")
+                }
             } catch (e: SecurityException) {
                 Log.e(TAG, "Error de seguridad al detener escaneo: ${e.message}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error al detener escaneo: ${e.message}")
             }
         }
     }
@@ -99,25 +137,41 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
                 callbacks.onDeviceFound(device, result.rssi)
             }
         }
+
+        override fun onScanFailed(errorCode: Int) {
+            Log.e(TAG, "Escaneo BLE fallido con código de error: $errorCode")
+        }
     }
 
     fun connectToDevice(device: BluetoothDevice) {
         try {
-            bluetoothGatt = device.connectGatt(context, false, gattCallback)
-            Log.d(TAG, "Intentando conectar a ${device.name ?: device.address}")
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED) {
+                bluetoothGatt = device.connectGatt(context, false, gattCallback)
+                Log.d(TAG, "Intentando conectar a ${device.name ?: device.address}")
+            } else {
+                Log.e(TAG, "Permiso BLUETOOTH_CONNECT no concedido")
+            }
         } catch (e: SecurityException) {
             Log.e(TAG, "Error de seguridad al conectar: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error al conectar: ${e.message}")
         }
     }
 
     fun disconnect() {
         try {
-            bluetoothGatt?.disconnect()
-            bluetoothGatt?.close()
-            bluetoothGatt = null
-            Log.d(TAG, "Desconectado")
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED) {
+                bluetoothGatt?.disconnect()
+                bluetoothGatt?.close()
+                bluetoothGatt = null
+                Log.d(TAG, "Desconectado")
+            }
         } catch (e: SecurityException) {
             Log.e(TAG, "Error de seguridad al desconectar: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error al desconectar: ${e.message}")
         }
     }
 
@@ -128,7 +182,10 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d(TAG, "Conectado al dispositivo GATT")
                 try {
-                    gatt.discoverServices()
+                    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
+                        == PackageManager.PERMISSION_GRANTED) {
+                        gatt.discoverServices()
+                    }
                 } catch (e: SecurityException) {
                     Log.e(TAG, "Error al descubrir servicios: ${e.message}")
                 }
@@ -148,21 +205,24 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
 
                     if (dataCharacteristic != null) {
                         try {
-                            // Habilitar notificaciones
-                            gatt.setCharacteristicNotification(dataCharacteristic, true)
+                            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
+                                == PackageManager.PERMISSION_GRANTED) {
+                                // Habilitar notificaciones
+                                gatt.setCharacteristicNotification(dataCharacteristic, true)
 
-                            // Escribir el descriptor para habilitar notificaciones
-                            val descriptor = dataCharacteristic?.getDescriptor(DESCRIPTOR_UUID)
-                            if (descriptor != null) {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                                } else {
-                                    @Suppress("DEPRECATION")
-                                    descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                                    @Suppress("DEPRECATION")
-                                    gatt.writeDescriptor(descriptor)
+                                // Escribir el descriptor para habilitar notificaciones
+                                val descriptor = dataCharacteristic?.getDescriptor(DESCRIPTOR_UUID)
+                                if (descriptor != null) {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                                    } else {
+                                        @Suppress("DEPRECATION")
+                                        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                                        @Suppress("DEPRECATION")
+                                        gatt.writeDescriptor(descriptor)
+                                    }
+                                    Log.d(TAG, "Notificaciones habilitadas")
                                 }
-                                Log.d(TAG, "Notificaciones habilitadas")
                             }
                         } catch (e: SecurityException) {
                             Log.e(TAG, "Error al configurar notificaciones: ${e.message}")
@@ -178,15 +238,19 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
             }
         }
 
+        // Para Android < 13
         @Deprecated("Deprecated in Java")
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
             super.onCharacteristicChanged(gatt, characteristic)
-            handleCharacteristicChanged(characteristic)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                handleCharacteristicChanged(characteristic)
+            }
         }
 
+        // Para Android 13+
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
@@ -194,10 +258,11 @@ class BLEManager(private val context: Context, callbacks: BLECallbacks) {
         ) {
             super.onCharacteristicChanged(gatt, characteristic, value)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                // Obtenemos los datos directamente del valor proporcionado
-                val data = String(value, StandardCharsets.UTF_8)
-                Log.d(TAG, "Datos recibidos: $data")
-                callbacks.onDataReceived(data)
+                if (CHARACTERISTIC_UUID == characteristic.uuid) {
+                    val data = String(value, StandardCharsets.UTF_8)
+                    Log.d(TAG, "Datos recibidos: $data")
+                    callbacks.onDataReceived(data)
+                }
             }
         }
     }

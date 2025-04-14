@@ -1,4 +1,4 @@
-package com.example.sensorgas.ui.theme
+package com.example.MQ7Monitor.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

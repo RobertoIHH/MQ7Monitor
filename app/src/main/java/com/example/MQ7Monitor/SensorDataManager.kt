@@ -1,4 +1,4 @@
-package com.example.sensorgas
+package com.example.MQ7Monitor
 
 class SensorDataManager {
     var rawValue: Int = 0

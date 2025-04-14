@@ -16,9 +16,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' }  // Añadir esto
+        maven { url = uri("https://jitpack.io") }  // Sintaxis correcta para Kotlin DSL
     }
 }
 rootProject.name = "SensorGas"
 include(":app")
- 
