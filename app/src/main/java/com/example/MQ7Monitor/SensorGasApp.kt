@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import android.util.Log
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -60,13 +61,20 @@ fun SensorGasApp(
         ) {
             Button(
                 onClick = {
-                    viewModel.startScan()
-                    onScanClick()
+                    Log.d("SensorGasApp", "Botón de escaneo presionado")
+                    viewModel.startScan() // Primero inicia el escaneo en el ViewModel
+                    onScanClick() // Luego solicita permisos si es necesario
                 },
                 modifier = Modifier.weight(1f),
-                enabled = !isScanning
+                enabled = !isScanning,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
             ) {
-                Text(if (isScanning) "Escaneando..." else "Buscar")
+                Text(
+                    text = if (isScanning) "Escaneando..." else "Buscar",
+                    color = Color.White
+                )
             }
 
             Button(
@@ -101,30 +109,54 @@ fun SensorGasApp(
                 color = if (isConnected) Color.Green else Color.Red
             )
         }
-
-        // Lista de dispositivos
+        //lista Disp
         Text(
             text = "Dispositivos disponibles:",
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(top = 8.dp)
         )
 
-        LazyColumn(
+        if (isScanning) {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+            )
+        }
+
+// Añadir un log para depurar
+        val devices = deviceList
+        Log.d("SensorGasApp", "Renderizando ${devices.size} dispositivos")
+
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(150.dp)
                 .border(1.dp, Color.LightGray, RoundedCornerShape(4.dp))
                 .background(Color(0xFFF0F0F0))
         ) {
-            items(deviceList) { device ->
-                DeviceItem(
-                    deviceInfo = device,
-                    isSelected = selectedDevice?.address == device.address,
-                    onClick = { viewModel.selectDevice(device) }
+            if (devices.isEmpty()) {
+                // Mostrar mensaje si no hay dispositivos
+                Text(
+                    text = if (isScanning) "Buscando dispositivos..." else "No se encontraron dispositivos",
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(16.dp),
+                    color = Color.Gray
                 )
+            } else {
+                // Mostrar la lista de dispositivos encontrados
+                LazyColumn {
+                    items(devices) { device ->
+                        DeviceItem(
+                            deviceInfo = device,
+                            isSelected = selectedDevice?.address == device.address,
+                            onClick = { viewModel.selectDevice(device) }
+                        )
+                    }
+                }
             }
         }
-
         // Datos del sensor
         Card(
             modifier = Modifier

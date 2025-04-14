@@ -1,11 +1,14 @@
 package com.example.MQ7Monitor
 
 import android.bluetooth.BluetoothDevice
+import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -49,12 +52,25 @@ class GasSensorViewModel : ViewModel() {
         // Configurar callbacks
         bleManager?.setCallbacks(object : BLEManager.BLECallbacks {
             override fun onDeviceFound(device: BluetoothDevice, rssi: Int) {
-                val deviceName = device.name ?: "Dispositivo desconocido"
-                val deviceAddress = device.address
+                try {
+                    val deviceName = device.name ?: "Dispositivo desconocido"
+                    val deviceAddress = device.address
 
-                // Evitar duplicados
-                if (_deviceList.none { it.address == deviceAddress }) {
-                    _deviceList.add(DeviceInfo(deviceName, deviceAddress, rssi))
+                    Log.d("GasSensorViewModel", "Dispositivo encontrado en ViewModel: $deviceName, $deviceAddress, RSSI: $rssi")
+
+                    // Importante: Actualizar la UI en el hilo principal
+                    viewModelScope.launch(Dispatchers.Main) {
+                        // Verificar si ya existe el dispositivo
+                        val exists = _deviceList.any { it.address == deviceAddress }
+                        if (!exists) {
+                            Log.d("GasSensorViewModel", "Añadiendo dispositivo a la lista: $deviceName")
+                            _deviceList.add(DeviceInfo(deviceName, deviceAddress, rssi))
+                            Log.d("GasSensorViewModel", "Lista actual: ${_deviceList.size} dispositivos")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("GasSensorViewModel", "Error al procesar dispositivo: ${e.message}")
+                    e.printStackTrace()
                 }
             }
 
@@ -66,59 +82,83 @@ class GasSensorViewModel : ViewModel() {
 
                     dataManager.updateData(rawValue, voltage)
 
-                    _rawValue.value = dataManager.rawValue
-                    _voltage.value = dataManager.voltage
-                    _ppmValue.value = dataManager.estimatedPpm
+                    // Actualizar en el hilo principal
+                    viewModelScope.launch {
+                        _rawValue.value = dataManager.rawValue
+                        _voltage.value = dataManager.voltage
+                        _ppmValue.value = dataManager.estimatedPpm
 
-                    // Actualizar datos del gráfico
-                    if (_chartData.size >= 60) {
-                        _chartData.removeAt(0)
+                        // Actualizar datos del gráfico
+                        if (_chartData.size >= 60) {
+                            _chartData.removeAt(0)
+                        }
+                        _chartData.add(DataPoint(_chartData.size.toFloat(), rawValue.toFloat()))
                     }
-                    _chartData.add(DataPoint(_chartData.size.toFloat(), rawValue.toFloat()))
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    Log.e("GasSensorViewModel", "Error al procesar los datos: ${e.message}")
                 }
             }
 
             override fun onConnectionStateChange(connected: Boolean) {
-                _isConnected.value = connected
-                _connectionStatus.value = if (connected) "Conectado" else "Desconectado"
+                viewModelScope.launch {
+                    _isConnected.value = connected
+                    _connectionStatus.value = if (connected) "Conectado" else "Desconectado"
+                }
             }
         })
     }
 
     fun startScan() {
+        Log.d("GasSensorViewModel", "Iniciando escaneo...")
         _deviceList.clear()
         _isScanning.value = true
+
+        // Asegurarse de que el bleManager no sea nulo
+        if (bleManager == null) {
+            Log.e("GasSensorViewModel", "Error: bleManager es nulo")
+            _isScanning.value = false
+            return
+        }
+
         bleManager?.scanForDevices()
+        Log.d("GasSensorViewModel", "Escaneo iniciado, lista limpiada")
 
         // Simular detención de escaneo después de 30 segundos
         viewModelScope.launch {
-            kotlinx.coroutines.delay(30000)
-            _isScanning.value = false
+            delay(30000)
+            if (_isScanning.value) {
+                _isScanning.value = false
+                Log.d("GasSensorViewModel", "Escaneo detenido después de 30 segundos")
+            }
         }
     }
 
     fun stopScan() {
         bleManager?.stopScan()
         _isScanning.value = false
+        Log.d("GasSensorViewModel", "Escaneo detenido manualmente")
     }
 
     fun selectDevice(device: DeviceInfo) {
         val btDevice = bleManager?.getDeviceByAddress(device.address)
         if (btDevice != null) {
             _selectedDevice.value = btDevice
+            Log.d("GasSensorViewModel", "Dispositivo seleccionado: ${device.name}")
+        } else {
+            Log.e("GasSensorViewModel", "No se pudo encontrar el dispositivo BLE para la dirección: ${device.address}")
         }
     }
 
     fun connectToDevice() {
         _selectedDevice.value?.let { device ->
             _connectionStatus.value = "Conectando..."
+            Log.d("GasSensorViewModel", "Intentando conectar a: ${device.address}")
             bleManager?.connectToDevice(device)
         }
     }
 
     fun disconnectDevice() {
+        Log.d("GasSensorViewModel", "Desconectando...")
         bleManager?.disconnect()
     }
 
