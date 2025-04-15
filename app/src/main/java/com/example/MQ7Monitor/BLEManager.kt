@@ -23,6 +23,8 @@ import android.util.Log
 import androidx.core.app.ActivityCompat
 import java.nio.charset.StandardCharsets
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.regex.Pattern
 
 class BLEManager(private val context: Context, private var callbacks: BLECallbacks) {
     companion object {
@@ -34,6 +36,9 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
         private val DESCRIPTOR_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         private const val SCAN_PERIOD = 30000L // 30 segundos
+
+        // Tiempo máximo para esperar a que se complete un mensaje JSON (ms)
+        private const val JSON_COMPLETION_TIMEOUT = 1000L
     }
 
     private var bluetoothAdapter: BluetoothAdapter
@@ -41,8 +46,10 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
     private var bluetoothGatt: BluetoothGatt? = null
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
     private val scanHandler = Handler(Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var isScanning = false
-    private var dataBuffer = StringBuilder()  // Buffer para acumular datos fragmentados
+    private var dataBuffer = StringBuilder(100)  // Buffer más grande para acumular datos (100 chars)
+    private var lastFragmentTime = 0L  // Para seguimiento de fragmentos y timeouts
 
     // Mantener un mapa de dispositivos
     private val deviceMap = mutableMapOf<String, BluetoothDevice>()
@@ -134,7 +141,7 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
                 deviceMap[deviceAddress] = device
 
                 // Informar del dispositivo encontrado desde el hilo principal
-                Handler(Looper.getMainLooper()).post {
+                mainHandler.post {
                     Log.d(TAG, "Dispositivo encontrado: $deviceName, dirección: $deviceAddress, RSSI: ${result.rssi}")
                     callbacks.onDeviceFound(device, result.rssi)
                 }
@@ -159,10 +166,17 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
         try {
             // Limpiar buffer al iniciar una nueva conexión
             dataBuffer.clear()
+            lastFragmentTime = 0L
 
             if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
                 == PackageManager.PERMISSION_GRANTED) {
-                bluetoothGatt = device.connectGatt(context, false, gattCallback)
+                // Abrir conexión con mayor MTU para paquetes más grandes
+                bluetoothGatt = device.connectGatt(
+                    context,
+                    false,
+                    gattCallback,
+                    BluetoothDevice.TRANSPORT_LE
+                )
                 Log.d(TAG, "Intentando conectar a ${device.name ?: device.address}")
             } else {
                 Log.e(TAG, "Permiso BLUETOOTH_CONNECT no concedido")
@@ -184,7 +198,7 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
                 Log.d(TAG, "Desconectado")
 
                 // Notificar desconexión explícitamente
-                Handler(Looper.getMainLooper()).post {
+                mainHandler.post {
                     callbacks.onConnectionStateChange(false)
                 }
             }
@@ -204,21 +218,32 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
                 try {
                     if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
                         == PackageManager.PERMISSION_GRANTED) {
+                        // Solicitar un MTU más grande para paquetes más grandes
+                        bluetoothGatt?.requestMtu(512)
                         gatt.discoverServices()
                     }
                 } catch (e: SecurityException) {
                     Log.e(TAG, "Error al descubrir servicios: ${e.message}")
                 }
                 // Notificar en el hilo principal
-                Handler(Looper.getMainLooper()).post {
+                mainHandler.post {
                     callbacks.onConnectionStateChange(true)
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d(TAG, "Desconectado del dispositivo GATT")
                 // Notificar en el hilo principal
-                Handler(Looper.getMainLooper()).post {
+                mainHandler.post {
                     callbacks.onConnectionStateChange(false)
                 }
+            }
+        }
+
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            super.onMtuChanged(gatt, mtu, status)
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "MTU cambiado a $mtu bytes")
+            } else {
+                Log.e(TAG, "No se pudo cambiar el MTU, status: $status")
             }
         }
 
@@ -310,41 +335,140 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
     // Método para procesar datos potencialmente fragmentados
     private fun processReceivedData(dataFragment: String) {
         try {
-            Log.d(TAG, "Datos recibidos: $dataFragment")
+            val currentTime = System.currentTimeMillis()
+            Log.d(TAG, "Datos recibidos: $dataFragment (${dataFragment.length} chars)")
+
+            // Resetear el buffer si ha pasado mucho tiempo desde el último fragmento
+            if (lastFragmentTime > 0 && currentTime - lastFragmentTime > JSON_COMPLETION_TIMEOUT) {
+                Log.d(TAG, "Timeout: Descartando buffer incompleto: $dataBuffer")
+                dataBuffer.clear()
+            }
+
+            // Actualizar tiempo del último fragmento
+            lastFragmentTime = currentTime
 
             // Añadir el fragmento al buffer
             dataBuffer.append(dataFragment)
-
-            // Verificar si el buffer contiene un JSON completo
             val bufferStr = dataBuffer.toString()
 
-            // Comprobar si el JSON está completo (tiene llaves de apertura y cierre)
+            // Log del buffer completo para depuración
+            Log.d(TAG, "Buffer actual: $bufferStr (${bufferStr.length} chars)")
+
+            // Verificar si tenemos un JSON completo o múltiples JSON
             if (bufferStr.startsWith("{") && bufferStr.endsWith("}")) {
-                // JSON completo, procesar
-                Handler(Looper.getMainLooper()).post {
-                    callbacks.onDataReceived(bufferStr)
+                // Parece un JSON completo, pero verificamos estructura
+                if (isValidJson(bufferStr)) {
+                    Log.d(TAG, "JSON completo encontrado: $bufferStr")
+                    mainHandler.post {
+                        callbacks.onDataReceived(bufferStr)
+                    }
+                    dataBuffer.clear()
                 }
-                // Limpiar buffer después de procesar
-                dataBuffer.clear()
             } else if (bufferStr.contains("}{")) {
-                // Llegaron múltiples JSON juntos, separar y procesar el primero
-                val split = bufferStr.indexOf("}{")
-                val firstJson = bufferStr.substring(0, split + 1)
-
-                Handler(Looper.getMainLooper()).post {
-                    callbacks.onDataReceived(firstJson)
+                // Fragmentos múltiples juntos - procesamos el primero completo
+                val firstClosingBrace = bufferStr.indexOf("}")
+                if (firstClosingBrace > 0) {
+                    val firstJson = bufferStr.substring(0, firstClosingBrace + 1)
+                    if (isValidJson(firstJson)) {
+                        Log.d(TAG, "Primer JSON extraído: $firstJson")
+                        mainHandler.post {
+                            callbacks.onDataReceived(firstJson)
+                        }
+                        // Guardar el resto en el buffer
+                        val remaining = bufferStr.substring(firstClosingBrace + 1)
+                        dataBuffer.clear()
+                        dataBuffer.append(remaining)
+                    }
+                }
+            } else {
+                // Extraer cualquier JSON completo usando regex
+                val pattern = Pattern.compile("\\{[^\\{\\}]*\\}")
+                val matcher = pattern.matcher(bufferStr)
+                while (matcher.find()) {
+                    val json = matcher.group()
+                    if (isValidJson(json)) {
+                        Log.d(TAG, "JSON extraído por regex: $json")
+                        mainHandler.post {
+                            callbacks.onDataReceived(json)
+                        }
+                    }
                 }
 
-                // Conservar el resto para próximos fragmentos
-                dataBuffer.clear()
-                dataBuffer.append(bufferStr.substring(split + 1))
+                // Si hemos extraído todos los JSON completos, limpiar el buffer
+                if (bufferStr.endsWith("}") && bufferStr.indexOf("{") <= bufferStr.lastIndexOf("}")) {
+                    dataBuffer.clear()
+                }
             }
-            // Si no está completo, seguir acumulando
+
+            // Análisis alternativo: Si tenemos las etiquetas esperadas en el fragmento, extraer datos directamente
+            tryExtractValues(dataFragment)
 
         } catch (e: Exception) {
             Log.e(TAG, "Error al procesar fragmento de datos: ${e.message}")
-            // Limpiar buffer en caso de error
-            dataBuffer.clear()
+            e.printStackTrace()
+            // No limpiamos el buffer automáticamente para intentar recuperar más datos
+        }
+    }
+
+    // Método para validar JSON mínimamente sin parsearlo
+    private fun isValidJson(str: String): Boolean {
+        return str.startsWith("{") && str.endsWith("}")
+    }
+
+    // Método para extraer valores directamente cuando el JSON está fragmentado
+    private fun tryExtractValues(fragment: String) {
+        try {
+            // Buscar patrones de ADC, V y ppm
+            val adcPattern = "\\\"ADC\\\"\\s*:\\s*(\\d+)".toRegex()
+            val voltagePattern = "\\\"V\\\"\\s*:\\s*([0-9.]+)".toRegex()
+            val ppmPattern = "\\\"ppm\\\"\\s*:\\s*([0-9.]+)".toRegex()
+
+            // Map para almacenar valores encontrados
+            val values = mutableMapOf<String, Any>()
+
+            // Intentar encontrar valores
+            adcPattern.find(fragment)?.let {
+                values["ADC"] = it.groupValues[1].toInt()
+            }
+
+            voltagePattern.find(fragment)?.let {
+                values["V"] = it.groupValues[1].toDouble()
+            }
+
+            ppmPattern.find(fragment)?.let {
+                values["ppm"] = it.groupValues[1].toDouble()
+            }
+
+            // Si tenemos al menos 2 de los 3 valores, reconstruimos el JSON
+            if (values.size >= 2) {
+                val reconstructed = StringBuilder("{")
+                values.entries.forEachIndexed { index, entry ->
+                    val key = entry.key
+                    val value = entry.value
+
+                    reconstructed.append("\"$key\":")
+                    when (value) {
+                        is Int -> reconstructed.append(value)
+                        is Double -> reconstructed.append(value)
+                        else -> reconstructed.append("\"$value\"")
+                    }
+
+                    if (index < values.size - 1) {
+                        reconstructed.append(",")
+                    }
+                }
+                reconstructed.append("}")
+
+                val jsonStr = reconstructed.toString()
+                Log.d(TAG, "JSON reconstruido de fragmentos: $jsonStr")
+
+                // Enviar a ViewModel
+                mainHandler.post {
+                    callbacks.onDataReceived(jsonStr)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error al extraer valores de fragmento: ${e.message}")
         }
     }
 }

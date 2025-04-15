@@ -18,11 +18,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun SensorGasApp(
@@ -187,7 +189,7 @@ fun SensorGasApp(
 
                 Text(text = "ADC: $rawValue")
                 Text(text = "Voltaje: ${String.format("%.2f", voltage)} V")
-                Text(text = "PPM: $ppmValue ppm")
+                Text(text = "PPM: ${String.format("%.2f", ppmValue)} ppm")
             }
         }
 
@@ -264,17 +266,26 @@ fun DeviceItem(
 fun LineChart(dataPoints: List<DataPoint>) {
     if (dataPoints.isEmpty()) return
 
+    // Acceder al ViewModel para obtener los valores min/max de ADC
+    val viewModel: GasSensorViewModel = viewModel()
+    val minADC = viewModel.minADCValue.value.toFloat()
+    val maxADC = viewModel.maxADCValue.value.toFloat().coerceAtLeast(minADC + 1f)
+
     Canvas(
         modifier = Modifier.fillMaxSize()
     ) {
         val width = size.width
         val height = size.height
         val padding = 16.dp.toPx()
+        val rightPadding = 40.dp.toPx() // Padding adicional para la escala derecha
 
-        // Calcular valores mínimos y máximos
+        // Calcular valores mínimos y máximos para el eje Y (PPM)
         val minY = dataPoints.minByOrNull { it.y }?.y ?: 0f
-        val maxY = dataPoints.maxByOrNull { it.y }?.y ?: 4095f
+        val maxY = dataPoints.maxByOrNull { it.y }?.y ?: 100f
         val range = (maxY - minY).coerceAtLeast(1f)
+
+        // Usar los valores dinámicos para el eje ADC
+        val adcRange = (maxADC - minADC).coerceAtLeast(1f)
 
         // Dibujar ejes
         drawLine(
@@ -287,7 +298,15 @@ fun LineChart(dataPoints: List<DataPoint>) {
         drawLine(
             color = Color.Gray,
             start = Offset(padding, height - padding),
-            end = Offset(width - padding, height - padding),
+            end = Offset(width - rightPadding, height - padding),
+            strokeWidth = 1.dp.toPx()
+        )
+
+        // Dibujar eje Y secundario (derecho)
+        drawLine(
+            color = Color.Gray,
+            start = Offset(width - rightPadding, padding),
+            end = Offset(width - rightPadding, height - padding),
             strokeWidth = 1.dp.toPx()
         )
 
@@ -296,7 +315,7 @@ fun LineChart(dataPoints: List<DataPoint>) {
             val path = Path()
             val points = dataPoints.mapIndexed { index, point ->
                 // Escalar puntos al espacio del gráfico
-                val x = padding + (index.toFloat() / (dataPoints.size - 1)) * (width - 2 * padding)
+                val x = padding + (index.toFloat() / (dataPoints.size - 1)) * (width - padding - rightPadding)
                 val y = height - padding - ((point.y - minY) / range) * (height - 2 * padding)
                 Offset(x, y)
             }
@@ -324,9 +343,84 @@ fun LineChart(dataPoints: List<DataPoint>) {
                 )
             }
         }
+
+        // Dibujar etiquetas en el eje Y (izquierdo - PPM)
+        val yLabelCount = 5
+        for (i in 0..yLabelCount) {
+            val yPos = height - padding - (i.toFloat() / yLabelCount) * (height - 2 * padding)
+            val ppmValue = minY + (i.toFloat() / yLabelCount) * range
+
+            // Línea de marca
+            drawLine(
+                color = Color.LightGray,
+                start = Offset(padding - 5.dp.toPx(), yPos),
+                end = Offset(padding, yPos),
+                strokeWidth = 1.dp.toPx()
+            )
+
+            // Texto del valor PPM
+            drawContext.canvas.nativeCanvas.drawText(
+                String.format("%.1f", ppmValue),
+                padding - 35.dp.toPx(),
+                yPos + 5.dp.toPx(),
+                android.graphics.Paint().apply {
+                    color = android.graphics.Color.DKGRAY
+                    textSize = 8.dp.toPx()
+                    textAlign = android.graphics.Paint.Align.RIGHT
+                }
+            )
+        }
+
+        // Dibujar etiquetas en el eje Y secundario (derecho - ADC)
+        for (i in 0..yLabelCount) {
+            val yPos = height - padding - (i.toFloat() / yLabelCount) * (height - 2 * padding)
+            val adcValue = minADC + (i.toFloat() / yLabelCount) * adcRange
+
+            // Línea de marca
+            drawLine(
+                color = Color.LightGray,
+                start = Offset(width - rightPadding, yPos),
+                end = Offset(width - rightPadding + 5.dp.toPx(), yPos),
+                strokeWidth = 1.dp.toPx()
+            )
+
+            // Texto del valor ADC
+            drawContext.canvas.nativeCanvas.drawText(
+                adcValue.toInt().toString(),
+                width - rightPadding + 7.dp.toPx(),
+                yPos + 5.dp.toPx(),
+                android.graphics.Paint().apply {
+                    color = android.graphics.Color.DKGRAY
+                    textSize = 8.dp.toPx()
+                    textAlign = android.graphics.Paint.Align.LEFT
+                }
+            )
+        }
+
+        // Etiquetas para los ejes
+        drawContext.canvas.nativeCanvas.drawText(
+            "PPM",
+            padding - 35.dp.toPx(),
+            padding - 10.dp.toPx(),
+            android.graphics.Paint().apply {
+                color = android.graphics.Color.BLUE
+                textSize = 10.dp.toPx()
+                textAlign = android.graphics.Paint.Align.LEFT
+            }
+        )
+
+        drawContext.canvas.nativeCanvas.drawText(
+            "ADC",
+            width - rightPadding + 5.dp.toPx(),
+            padding - 10.dp.toPx(),
+            android.graphics.Paint().apply {
+                color = android.graphics.Color.RED
+                textSize = 10.dp.toPx()
+                textAlign = android.graphics.Paint.Align.LEFT
+            }
+        )
     }
 }
-
 @Preview
 @Composable
 fun SensorGasAppPreview() {

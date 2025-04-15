@@ -37,8 +37,8 @@ class GasSensorViewModel : ViewModel() {
     private val _voltage = mutableStateOf(0.0)
     val voltage: State<Double> = _voltage
 
-    private val _ppmValue = mutableStateOf(0)
-    val ppmValue: State<Int> = _ppmValue
+    private val _ppmValue = mutableStateOf(0.0)
+    val ppmValue: State<Double> = _ppmValue
 
     // Datos para el gráfico
     val chartData = mutableStateListOf<DataPoint>()
@@ -48,6 +48,12 @@ class GasSensorViewModel : ViewModel() {
 
     // Conjunto para asegurar que no hay duplicados
     private val addedDeviceAddresses = mutableSetOf<String>()
+    //minos y maximos
+    private val _minADCValue = mutableStateOf(4095)
+    val minADCValue: State<Int> = _minADCValue
+
+    private val _maxADCValue = mutableStateOf(0)
+    val maxADCValue: State<Int> = _maxADCValue
 
     fun setBleManager(manager: BLEManager) {
         bleManager = manager
@@ -95,7 +101,7 @@ class GasSensorViewModel : ViewModel() {
                     if (jsonData.has("ADC") && jsonData.has("V") && jsonData.has("ppm")) {
                         val rawValue = jsonData.getInt("ADC")
                         val voltage = jsonData.getDouble("V")
-                        val ppm = jsonData.getDouble("ppm").toInt()
+                        val ppm = jsonData.getDouble("ppm")  // Ya lo cambiaste a Double
 
                         Log.d("GasSensorViewModel", "Datos procesados: ADC=$rawValue, V=$voltage, ppm=$ppm")
 
@@ -107,11 +113,18 @@ class GasSensorViewModel : ViewModel() {
                             _voltage.value = voltage
                             _ppmValue.value = ppm
 
+                            // Actualizar los valores mínimos y máximos de ADC
+                            _minADCValue.value = minOf(_minADCValue.value, rawValue)
+                            _maxADCValue.value = maxOf(_maxADCValue.value, rawValue)
+
                             // Actualizar datos del gráfico
                             if (chartData.size >= 60) {
                                 chartData.removeAt(0)
                             }
-                            chartData.add(DataPoint(chartData.size.toFloat(), rawValue.toFloat()))
+                            // Si quieres mostrar PPM en lugar de ADC en el gráfico:
+                            chartData.add(DataPoint(chartData.size.toFloat(), ppm.toFloat()))
+                            // O si prefieres mantener ADC en el gráfico:
+                            // chartData.add(DataPoint(chartData.size.toFloat(), rawValue.toFloat()))
                         }
                     } else {
                         Log.e("GasSensorViewModel", "JSON no contiene los campos esperados: $data")

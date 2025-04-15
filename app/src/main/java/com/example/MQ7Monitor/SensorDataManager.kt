@@ -9,10 +9,10 @@ class SensorDataManager {
     var voltage: Double = 0.0
         private set
 
-    var estimatedPpm: Int = 0
+    var estimatedPpm: Double = 0.0
         private set
 
-    fun updateData(rawValue: Int, voltage: Double, ppm: Int) {
+    fun updateData(rawValue: Int, voltage: Double, ppm: Double) {
         this.rawValue = rawValue
         this.voltage = voltage
         this.estimatedPpm = ppm
