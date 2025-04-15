@@ -185,9 +185,9 @@ fun SensorGasApp(
                 val voltage by viewModel.voltage
                 val ppmValue by viewModel.ppmValue
 
-                Text(text = "Valor: $rawValue")
+                Text(text = "ADC: $rawValue")
                 Text(text = "Voltaje: ${String.format("%.2f", voltage)} V")
-                Text(text = "CO estimado: $ppmValue ppm")
+                Text(text = "PPM: $ppmValue ppm")
             }
         }
 

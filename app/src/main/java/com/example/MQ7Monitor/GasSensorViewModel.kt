@@ -82,7 +82,7 @@ class GasSensorViewModel : ViewModel() {
 
             override fun onDataReceived(data: String) {
                 try {
-                    Log.d("GasSensorViewModel", "Datos JSON completos recibidos: $data")
+                    Log.d("GasSensorViewModel", "Datos JSON recibidos: $data")
 
                     // Validar que el JSON esté completo
                     if (!data.startsWith("{") || !data.endsWith("}")) {
@@ -92,19 +92,20 @@ class GasSensorViewModel : ViewModel() {
 
                     val jsonData = JSONObject(data)
 
-                    if (jsonData.has("g") && jsonData.has("V")) {
-                        val rawValue = jsonData.getInt("g")
+                    if (jsonData.has("ADC") && jsonData.has("V") && jsonData.has("ppm")) {
+                        val rawValue = jsonData.getInt("ADC")
                         val voltage = jsonData.getDouble("V")
+                        val ppm = jsonData.getDouble("ppm").toInt()
 
-                        Log.d("GasSensorViewModel", "Datos procesados: gas=$rawValue, voltage=$voltage")
+                        Log.d("GasSensorViewModel", "Datos procesados: ADC=$rawValue, V=$voltage, ppm=$ppm")
 
-                        dataManager.updateData(rawValue, voltage)
+                        dataManager.updateData(rawValue, voltage, ppm)
 
                         // Actualizar en el hilo principal
                         viewModelScope.launch(Dispatchers.Main) {
-                            _rawValue.value = dataManager.rawValue
-                            _voltage.value = dataManager.voltage
-                            _ppmValue.value = dataManager.estimatedPpm
+                            _rawValue.value = rawValue
+                            _voltage.value = voltage
+                            _ppmValue.value = ppm
 
                             // Actualizar datos del gráfico
                             if (chartData.size >= 60) {
