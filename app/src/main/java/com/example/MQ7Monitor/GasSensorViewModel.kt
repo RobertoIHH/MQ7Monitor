@@ -41,7 +41,8 @@ class GasSensorViewModel : ViewModel() {
     val ppmValue: State<Double> = _ppmValue
 
     // Datos para el gráfico
-    val chartData = mutableStateListOf<DataPoint>()
+    val ppmChartData = mutableStateListOf<DataPoint>()
+    val adcChartData = mutableStateListOf<DataPoint>()
 
     private var bleManager: BLEManager? = null
     private val dataManager = SensorDataManager()
@@ -117,14 +118,16 @@ class GasSensorViewModel : ViewModel() {
                             _minADCValue.value = minOf(_minADCValue.value, rawValue)
                             _maxADCValue.value = maxOf(_maxADCValue.value, rawValue)
 
-                            // Actualizar datos del gráfico
-                            if (chartData.size >= 60) {
-                                chartData.removeAt(0)
+                            if (ppmChartData.size >= 60) {
+                                ppmChartData.removeAt(0)
                             }
-                            // Si quieres mostrar PPM en lugar de ADC en el gráfico:
-                            chartData.add(DataPoint(chartData.size.toFloat(), ppm.toFloat()))
-                            // O si prefieres mantener ADC en el gráfico:
-                            // chartData.add(DataPoint(chartData.size.toFloat(), rawValue.toFloat()))
+                            ppmChartData.add(DataPoint(ppmChartData.size.toFloat(), ppm.toFloat()))
+
+// Actualizar datos del gráfico (para ADC)
+                            if (adcChartData.size >= 60) {
+                                adcChartData.removeAt(0)
+                            }
+                            adcChartData.add(DataPoint(adcChartData.size.toFloat(), rawValue.toFloat()))
                         }
                     } else {
                         Log.e("GasSensorViewModel", "JSON no contiene los campos esperados: $data")

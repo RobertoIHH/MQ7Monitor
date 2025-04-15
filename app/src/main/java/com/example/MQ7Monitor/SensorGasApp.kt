@@ -207,8 +207,11 @@ fun SensorGasApp(
                 .border(1.dp, Color.LightGray, RoundedCornerShape(4.dp))
                 .padding(8.dp)
         ) {
-            if (viewModel.chartData.isNotEmpty()) {
-                LineChart(dataPoints = viewModel.chartData)
+            if (viewModel.ppmChartData.isNotEmpty() || viewModel.adcChartData.isNotEmpty()) {
+                LineChart(
+                    ppmDataPoints = viewModel.ppmChartData,
+                    adcDataPoints = viewModel.adcChartData
+                )
             } else {
                 Text(
                     text = "Esperando datos...",
@@ -263,8 +266,9 @@ fun DeviceItem(
 }
 
 @Composable
-fun LineChart(dataPoints: List<DataPoint>) {
-    if (dataPoints.isEmpty()) return
+fun LineChart(ppmDataPoints: List<DataPoint>,
+              adcDataPoints: List<DataPoint>) {
+    if (ppmDataPoints.isEmpty() && adcDataPoints.isEmpty()) return
 
     // Acceder al ViewModel para obtener los valores min/max de ADC
     val viewModel: GasSensorViewModel = viewModel()
@@ -277,12 +281,13 @@ fun LineChart(dataPoints: List<DataPoint>) {
         val width = size.width
         val height = size.height
         val padding = 16.dp.toPx()
+        val leftPadding = 16.dp.toPx()
         val rightPadding = 40.dp.toPx() // Padding adicional para la escala derecha
 
         // Calcular valores mínimos y máximos para el eje Y (PPM)
-        val minY = dataPoints.minByOrNull { it.y }?.y ?: 0f
-        val maxY = dataPoints.maxByOrNull { it.y }?.y ?: 100f
-        val range = (maxY - minY).coerceAtLeast(1f)
+        val minPPM = ppmDataPoints.minByOrNull { it.y }?.y ?: 0f
+        val maxPPM = ppmDataPoints.maxByOrNull { it.y }?.y ?: 100f
+        val ppmRange = (maxPPM - minPPM).coerceAtLeast(1f)
 
         // Usar los valores dinámicos para el eje ADC
         val adcRange = (maxADC - minADC).coerceAtLeast(1f)
@@ -290,14 +295,14 @@ fun LineChart(dataPoints: List<DataPoint>) {
         // Dibujar ejes
         drawLine(
             color = Color.Gray,
-            start = Offset(padding, padding),
-            end = Offset(padding, height - padding),
+            start = Offset(leftPadding, padding),
+            end = Offset(leftPadding, height - padding),
             strokeWidth = 1.dp.toPx()
         )
 
         drawLine(
             color = Color.Gray,
-            start = Offset(padding, height - padding),
+            start = Offset(leftPadding, height - padding),
             end = Offset(width - rightPadding, height - padding),
             strokeWidth = 1.dp.toPx()
         )
@@ -311,12 +316,12 @@ fun LineChart(dataPoints: List<DataPoint>) {
         )
 
         // Dibujar línea de datos
-        if (dataPoints.size > 1) {
+        if (ppmDataPoints.size > 1) {
             val path = Path()
-            val points = dataPoints.mapIndexed { index, point ->
-                // Escalar puntos al espacio del gráfico
-                val x = padding + (index.toFloat() / (dataPoints.size - 1)) * (width - padding - rightPadding)
-                val y = height - padding - ((point.y - minY) / range) * (height - 2 * padding)
+            val points = ppmDataPoints.mapIndexed { index, point ->
+                // Escalar puntos al espacio del gráfico para PPM
+                val x = padding + (index.toFloat() / (ppmDataPoints.size - 1)) * (width - leftPadding - rightPadding)
+                val y = height - padding - ((point.y - minPPM) / ppmRange) * (height - 2 * padding)
                 Offset(x, y)
             }
 
@@ -344,11 +349,46 @@ fun LineChart(dataPoints: List<DataPoint>) {
             }
         }
 
+        if (adcDataPoints.size > 1) {
+            val path = Path()
+            val points = adcDataPoints.mapIndexed { index, point ->
+                // Escalar puntos al espacio del gráfico para ADC
+                val x = padding + (index.toFloat() / (adcDataPoints.size - 1)) * (width - leftPadding - rightPadding)
+                // Usar el rango de ADC para calcular Y
+                val normalizedValue = (point.y - minADC) / adcRange
+                val y = height - padding - normalizedValue * (height - 2 * padding)
+                Offset(x, y)
+            }
+
+            // Mover a primer punto
+            path.moveTo(points.first().x, points.first().y)
+
+            // Conectar resto de puntos
+            for (i in 1 until points.size) {
+                path.lineTo(points[i].x, points[i].y)
+            }
+
+            drawPath(
+                path = path,
+                color = Color.Red,
+                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+            )
+
+            // Dibujar puntos
+            points.forEach { point ->
+                drawCircle(
+                    color = Color.Red,
+                    radius = 3.dp.toPx(),
+                    center = point
+                )
+            }
+        }
+
         // Dibujar etiquetas en el eje Y (izquierdo - PPM)
         val yLabelCount = 5
         for (i in 0..yLabelCount) {
             val yPos = height - padding - (i.toFloat() / yLabelCount) * (height - 2 * padding)
-            val ppmValue = minY + (i.toFloat() / yLabelCount) * range
+            val ppmValue = minPPM + (i.toFloat() / yLabelCount) * ppmRange  // Corregido
 
             // Línea de marca
             drawLine(
@@ -361,7 +401,7 @@ fun LineChart(dataPoints: List<DataPoint>) {
             // Texto del valor PPM
             drawContext.canvas.nativeCanvas.drawText(
                 String.format("%.1f", ppmValue),
-                padding - 35.dp.toPx(),
+                padding - 10.dp.toPx(),
                 yPos + 5.dp.toPx(),
                 android.graphics.Paint().apply {
                     color = android.graphics.Color.DKGRAY
