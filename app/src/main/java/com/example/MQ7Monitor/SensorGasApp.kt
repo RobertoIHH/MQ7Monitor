@@ -186,39 +186,67 @@ fun SensorGasApp(
                 val rawValue by viewModel.rawValue
                 val voltage by viewModel.voltage
                 val ppmValue by viewModel.ppmValue
+                val gasType by viewModel.gasType
 
-                Text(text = "ADC: $rawValue")
-                Text(text = "Voltaje: ${String.format("%.2f", voltage)} V")
-                Text(text = "PPM: ${String.format("%.2f", ppmValue)} ppm")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Gas:",
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.width(80.dp)
+                    )
+                    Text(text = gasType)
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "ADC:",
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.width(80.dp)
+                    )
+                    Text(text = "$rawValue")
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Voltaje:",
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.width(80.dp)
+                    )
+                    Text(text = "${String.format("%.2f", voltage)} V")
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "PPM:",
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.width(80.dp)
+                    )
+                    Text(
+                        text = "${String.format("%.2f", ppmValue)} ppm",
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            gasType == "CO" && ppmValue > 50 -> Color.Red
+                            gasType == "CO" && ppmValue > 30 -> Color.Yellow
+                            gasType == "H2" && ppmValue > 1000 -> Color.Red
+                            gasType == "H2" && ppmValue > 500 -> Color.Yellow
+                            else -> Color.Green
+                        }
+                    )
+                }
             }
-        }
 
-        // Gráfico en tiempo real
-        Text(
-            text = "Gráfico en tiempo real:",
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = 8.dp)
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .border(1.dp, Color.LightGray, RoundedCornerShape(4.dp))
-                .padding(8.dp)
-        ) {
-            if (viewModel.ppmChartData.isNotEmpty() || viewModel.adcChartData.isNotEmpty()) {
-                LineChart(
-                    ppmDataPoints = viewModel.ppmChartData,
-                    adcDataPoints = viewModel.adcChartData
-                )
-            } else {
-                Text(
-                    text = "Esperando datos...",
-                    modifier = Modifier.align(Alignment.Center),
-                    color = Color.Gray
-                )
-            }
         }
     }
 }
@@ -270,10 +298,11 @@ fun LineChart(ppmDataPoints: List<DataPoint>,
               adcDataPoints: List<DataPoint>) {
     if (ppmDataPoints.isEmpty() && adcDataPoints.isEmpty()) return
 
-    // Acceder al ViewModel para obtener los valores min/max de ADC
+    // Acceder al ViewModel para obtener los valores min/max de ADC y el tipo de gas
     val viewModel: GasSensorViewModel = viewModel()
     val minADC = viewModel.minADCValue.value.toFloat()
     val maxADC = viewModel.maxADCValue.value.toFloat().coerceAtLeast(minADC + 1f)
+    val gasType by viewModel.gasType  // Obtener el tipo de gas actual
 
     Canvas(
         modifier = Modifier.fillMaxSize()
@@ -439,7 +468,7 @@ fun LineChart(ppmDataPoints: List<DataPoint>,
 
         // Etiquetas para los ejes
         drawContext.canvas.nativeCanvas.drawText(
-            "PPM",
+            "$gasType (PPM)",  // Añadir el tipo de gas a la etiqueta
             padding - 35.dp.toPx(),
             padding - 10.dp.toPx(),
             android.graphics.Paint().apply {

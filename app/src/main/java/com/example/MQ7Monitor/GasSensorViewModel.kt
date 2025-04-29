@@ -40,6 +40,10 @@ class GasSensorViewModel : ViewModel() {
     private val _ppmValue = mutableStateOf(0.0)
     val ppmValue: State<Double> = _ppmValue
 
+    // Nuevo estado para el tipo de gas
+    private val _gasType = mutableStateOf("CO")
+    val gasType: State<String> = _gasType
+
     // Datos para el gráfico
     val ppmChartData = mutableStateListOf<DataPoint>()
     val adcChartData = mutableStateListOf<DataPoint>()
@@ -102,17 +106,21 @@ class GasSensorViewModel : ViewModel() {
                     if (jsonData.has("ADC") && jsonData.has("V") && jsonData.has("ppm")) {
                         val rawValue = jsonData.getInt("ADC")
                         val voltage = jsonData.getDouble("V")
-                        val ppm = jsonData.getDouble("ppm")  // Ya lo cambiaste a Double
+                        val ppm = jsonData.getDouble("ppm")
 
-                        Log.d("GasSensorViewModel", "Datos procesados: ADC=$rawValue, V=$voltage, ppm=$ppm")
+                        // Obtener el tipo de gas (nuevo)
+                        val gasType = if (jsonData.has("gas")) jsonData.getString("gas") else "CO"
 
-                        dataManager.updateData(rawValue, voltage, ppm)
+                        Log.d("GasSensorViewModel", "Datos procesados: ADC=$rawValue, V=$voltage, ppm=$ppm, gas=$gasType")
+
+                        dataManager.updateData(rawValue, voltage, ppm, gasType)
 
                         // Actualizar en el hilo principal
                         viewModelScope.launch(Dispatchers.Main) {
                             _rawValue.value = rawValue
                             _voltage.value = voltage
                             _ppmValue.value = ppm
+                            _gasType.value = gasType
 
                             // Actualizar los valores mínimos y máximos de ADC
                             _minADCValue.value = minOf(_minADCValue.value, rawValue)
@@ -123,7 +131,7 @@ class GasSensorViewModel : ViewModel() {
                             }
                             ppmChartData.add(DataPoint(ppmChartData.size.toFloat(), ppm.toFloat()))
 
-// Actualizar datos del gráfico (para ADC)
+                            // Actualizar datos del gráfico (para ADC)
                             if (adcChartData.size >= 60) {
                                 adcChartData.removeAt(0)
                             }

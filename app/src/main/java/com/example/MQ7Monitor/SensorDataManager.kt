@@ -12,11 +12,15 @@ class SensorDataManager {
     var estimatedPpm: Double = 0.0
         private set
 
-    fun updateData(rawValue: Int, voltage: Double, ppm: Double) {
+    var gasType: String = "CO"
+        private set
+
+    fun updateData(rawValue: Int, voltage: Double, ppm: Double, gasType: String = "CO") {
         this.rawValue = rawValue
         this.voltage = voltage
         this.estimatedPpm = ppm
+        this.gasType = gasType
 
-        Log.d("SensorDataManager", "Datos actualizados: ADC=$rawValue, V=$voltage, ppm=$ppm")
+        Log.d("SensorDataManager", "Datos actualizados: ADC=$rawValue, V=$voltage, ppm=$ppm, gas=$gasType")
     }
 }
