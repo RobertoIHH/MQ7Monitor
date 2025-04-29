@@ -45,8 +45,10 @@ class GasSensorViewModel : ViewModel() {
     val gasType: State<String> = _gasType
 
     // Datos para el gráfico
-    val ppmChartData = mutableStateListOf<DataPoint>()
+    val coPpmData = mutableStateListOf<DataPoint>()
+    val h2PpmData = mutableStateListOf<DataPoint>()
     val adcChartData = mutableStateListOf<DataPoint>()
+    val ppmChartData = mutableStateListOf<DataPoint>()
 
     private var bleManager: BLEManager? = null
     private val dataManager = SensorDataManager()
@@ -70,7 +72,6 @@ class GasSensorViewModel : ViewModel() {
         // Actualizar el tipo de gas
         _gasType.value = newGasType
     }
-
 
     fun setBleManager(manager: BLEManager) {
         bleManager = manager
@@ -120,7 +121,7 @@ class GasSensorViewModel : ViewModel() {
                         val voltage = jsonData.getDouble("V")
                         val ppm = jsonData.getDouble("ppm")
 
-                        // Obtener el tipo de gas (nuevo)
+                        // Obtener el tipo de gas
                         val gasType = if (jsonData.has("gas")) jsonData.getString("gas") else "CO"
 
                         // Detectar cambio de gas
@@ -147,26 +148,43 @@ class GasSensorViewModel : ViewModel() {
                             _minADCValue.value = minOf(_minADCValue.value, rawValue)
                             _maxADCValue.value = maxOf(_maxADCValue.value, rawValue)
 
-                            // Gestionar los datos para la gráfica
-
-                            // Limitar tamaño de datos
-                            if (ppmChartData.size >= 60) {
-                                ppmChartData.removeAt(0)
-                            }
-
-                            // Añadir nuevo punto de datos con el gas actual
-                            ppmChartData.add(DataPoint(
-                                x = ppmChartData.size.toFloat(),
+                            // Agregar el punto a la lista correspondiente según el tipo de gas
+                            val newPoint = DataPoint(
+                                x = System.currentTimeMillis().toFloat(),
                                 y = ppm.toFloat(),
                                 gasType = gasType
-                            ))
+                            )
 
-                            // Actualizar datos del gráfico (para ADC)
+                            if (gasType == "CO") {
+                                // Limitar tamaño de la lista de CO
+                                if (coPpmData.size >= 60) {
+                                    coPpmData.removeAt(0)
+                                }
+                                coPpmData.add(newPoint)
+
+                                // Si cambió el gas, limpiar la otra lista
+                                if (gasChanged) {
+                                    h2PpmData.clear()
+                                }
+                            } else if (gasType == "H2") {
+                                // Limitar tamaño de la lista de H2
+                                if (h2PpmData.size >= 60) {
+                                    h2PpmData.removeAt(0)
+                                }
+                                h2PpmData.add(newPoint)
+
+                                // Si cambió el gas, limpiar la otra lista
+                                if (gasChanged) {
+                                    coPpmData.clear()
+                                }
+                            }
+
+                            // Actualizar datos del gráfico para ADC
                             if (adcChartData.size >= 60) {
                                 adcChartData.removeAt(0)
                             }
                             adcChartData.add(DataPoint(
-                                x = adcChartData.size.toFloat(),
+                                x = System.currentTimeMillis().toFloat(),
                                 y = rawValue.toFloat(),
                                 gasType = gasType
                             ))
