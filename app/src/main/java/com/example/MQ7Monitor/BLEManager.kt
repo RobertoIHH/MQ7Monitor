@@ -30,9 +30,10 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
     companion object {
         private const val TAG = "BLEManager"
 
-        // UUID del servicio y característica de la ESP32
+        // UUID del servicio y características de la ESP32
         private val SERVICE_UUID = UUID.fromString("4fafc201-1fb5-459e-8fcc-c5c9c331914b")
         private val CHARACTERISTIC_UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a8")
+        private val COMMAND_CHAR_UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a9")
         private val DESCRIPTOR_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         private const val SCAN_PERIOD = 30000L // 30 segundos
@@ -45,6 +46,7 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
     private var scanner: BluetoothLeScanner? = null
     private var bluetoothGatt: BluetoothGatt? = null
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
+    private var commandCharacteristic: BluetoothGattCharacteristic? = null
     private val scanHandler = Handler(Looper.getMainLooper())
     private val mainHandler = Handler(Looper.getMainLooper())
     private var isScanning = false
@@ -209,6 +211,34 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
         }
     }
 
+    // Enviar comando para cambiar el tipo de gas
+    fun sendGasTypeCommand(gasType: GasType) {
+        try {
+            if (commandCharacteristic == null) {
+                Log.e(TAG, "No se puede enviar comando: característica de comando no disponible")
+                return
+            }
+
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED) {
+                // Crear comando basado en el tipo de gas
+                val command = "${gasType.name}:"
+
+                // Convertir a bytes y enviar
+                commandCharacteristic?.setValue(command.toByteArray(StandardCharsets.UTF_8))
+                val success = bluetoothGatt?.writeCharacteristic(commandCharacteristic)
+
+                Log.d(TAG, "Enviando comando para cambiar a gas ${gasType.name}: $success")
+            } else {
+                Log.e(TAG, "Permiso BLUETOOTH_CONNECT no concedido")
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Error de seguridad al enviar comando: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error al enviar comando: ${e.message}")
+        }
+    }
+
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             super.onConnectionStateChange(gatt, status, newState)
@@ -216,8 +246,12 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d(TAG, "Conectado al dispositivo GATT")
                 try {
-                    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
-                        == PackageManager.PERMISSION_GRANTED) {
+                    if (ActivityCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        )
+                        == PackageManager.PERMISSION_GRANTED
+                    ) {
                         // Solicitar un MTU más grande para paquetes más grandes
                         bluetoothGatt?.requestMtu(512)
                         gatt.discoverServices()
@@ -252,34 +286,53 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 val service = gatt.getService(SERVICE_UUID)
                 if (service != null) {
+                    // Obtener características
                     dataCharacteristic = service.getCharacteristic(CHARACTERISTIC_UUID)
+                    commandCharacteristic = service.getCharacteristic(COMMAND_CHAR_UUID)
 
                     if (dataCharacteristic != null) {
                         try {
-                            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
-                                == PackageManager.PERMISSION_GRANTED) {
-                                // Habilitar notificaciones
+                            if (ActivityCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.BLUETOOTH_CONNECT
+                                )
+                                == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                // Habilitar notificaciones para la característica de datos
                                 gatt.setCharacteristicNotification(dataCharacteristic, true)
 
                                 // Escribir el descriptor para habilitar notificaciones
                                 val descriptor = dataCharacteristic?.getDescriptor(DESCRIPTOR_UUID)
                                 if (descriptor != null) {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                        gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                                        gatt.writeDescriptor(
+                                            descriptor,
+                                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                                        )
                                     } else {
                                         @Suppress("DEPRECATION")
-                                        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                                        descriptor.value =
+                                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                                         @Suppress("DEPRECATION")
                                         gatt.writeDescriptor(descriptor)
                                     }
-                                    Log.d(TAG, "Notificaciones habilitadas")
+                                    Log.d(TAG, "Notificaciones habilitadas para datos")
                                 }
+
+                                Log.d(
+                                    TAG,
+                                    "Características encontradas: Data=${dataCharacteristic != null}, Command=${commandCharacteristic != null}"
+                                )
                             }
                         } catch (e: SecurityException) {
                             Log.e(TAG, "Error al configurar notificaciones: ${e.message}")
                         }
                     } else {
-                        Log.e(TAG, "No se encontró la característica")
+                        Log.e(TAG, "No se encontró la característica de datos")
+                    }
+
+                    if (commandCharacteristic == null) {
+                        Log.e(TAG, "No se encontró la característica de comandos")
                     }
                 } else {
                     Log.e(TAG, "No se encontró el servicio")
@@ -287,188 +340,6 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
             } else {
                 Log.e(TAG, "Error al descubrir servicios: $status")
             }
-        }
-
-        // Para Android < 13
-        @Deprecated("Deprecated in Java")
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic
-        ) {
-            super.onCharacteristicChanged(gatt, characteristic)
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                handleCharacteristicChanged(characteristic)
-            }
-        }
-
-        // Para Android 13+
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            value: ByteArray
-        ) {
-            super.onCharacteristicChanged(gatt, characteristic, value)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                if (CHARACTERISTIC_UUID == characteristic.uuid) {
-                    val data = String(value, StandardCharsets.UTF_8)
-                    processReceivedData(data)
-                }
-            }
-        }
-    }
-
-    private fun handleCharacteristicChanged(characteristic: BluetoothGattCharacteristic) {
-        if (CHARACTERISTIC_UUID == characteristic.uuid) {
-            try {
-                @Suppress("DEPRECATION")
-                val data = characteristic.value
-                if (data != null && data.isNotEmpty()) {
-                    val dataString = String(data, StandardCharsets.UTF_8)
-                    processReceivedData(dataString)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error al procesar datos: ${e.message}")
-            }
-        }
-    }
-
-    // Método para procesar datos potencialmente fragmentados
-    private fun processReceivedData(dataFragment: String) {
-        try {
-            val currentTime = System.currentTimeMillis()
-            Log.d(TAG, "Datos recibidos: $dataFragment (${dataFragment.length} chars)")
-
-            // Resetear el buffer si ha pasado mucho tiempo desde el último fragmento
-            if (lastFragmentTime > 0 && currentTime - lastFragmentTime > JSON_COMPLETION_TIMEOUT) {
-                Log.d(TAG, "Timeout: Descartando buffer incompleto: $dataBuffer")
-                dataBuffer.clear()
-            }
-
-            // Actualizar tiempo del último fragmento
-            lastFragmentTime = currentTime
-
-            // Añadir el fragmento al buffer
-            dataBuffer.append(dataFragment)
-            val bufferStr = dataBuffer.toString()
-
-            // Log del buffer completo para depuración
-            Log.d(TAG, "Buffer actual: $bufferStr (${bufferStr.length} chars)")
-
-            // Verificar si tenemos un JSON completo o múltiples JSON
-            if (bufferStr.startsWith("{") && bufferStr.endsWith("}")) {
-                // Parece un JSON completo, pero verificamos estructura
-                if (isValidJson(bufferStr)) {
-                    Log.d(TAG, "JSON completo encontrado: $bufferStr")
-                    mainHandler.post {
-                        callbacks.onDataReceived(bufferStr)
-                    }
-                    dataBuffer.clear()
-                }
-            } else if (bufferStr.contains("}{")) {
-                // Fragmentos múltiples juntos - procesamos el primero completo
-                val firstClosingBrace = bufferStr.indexOf("}")
-                if (firstClosingBrace > 0) {
-                    val firstJson = bufferStr.substring(0, firstClosingBrace + 1)
-                    if (isValidJson(firstJson)) {
-                        Log.d(TAG, "Primer JSON extraído: $firstJson")
-                        mainHandler.post {
-                            callbacks.onDataReceived(firstJson)
-                        }
-                        // Guardar el resto en el buffer
-                        val remaining = bufferStr.substring(firstClosingBrace + 1)
-                        dataBuffer.clear()
-                        dataBuffer.append(remaining)
-                    }
-                }
-            } else {
-                // Extraer cualquier JSON completo usando regex
-                val pattern = Pattern.compile("\\{[^\\{\\}]*\\}")
-                val matcher = pattern.matcher(bufferStr)
-                while (matcher.find()) {
-                    val json = matcher.group()
-                    if (isValidJson(json)) {
-                        Log.d(TAG, "JSON extraído por regex: $json")
-                        mainHandler.post {
-                            callbacks.onDataReceived(json)
-                        }
-                    }
-                }
-
-                // Si hemos extraído todos los JSON completos, limpiar el buffer
-                if (bufferStr.endsWith("}") && bufferStr.indexOf("{") <= bufferStr.lastIndexOf("}")) {
-                    dataBuffer.clear()
-                }
-            }
-
-            // Análisis alternativo: Si tenemos las etiquetas esperadas en el fragmento, extraer datos directamente
-            tryExtractValues(dataFragment)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error al procesar fragmento de datos: ${e.message}")
-            e.printStackTrace()
-            // No limpiamos el buffer automáticamente para intentar recuperar más datos
-        }
-    }
-
-    // Método para validar JSON mínimamente sin parsearlo
-    private fun isValidJson(str: String): Boolean {
-        return str.startsWith("{") && str.endsWith("}")
-    }
-
-    // Método para extraer valores directamente cuando el JSON está fragmentado
-    private fun tryExtractValues(fragment: String) {
-        try {
-            // Buscar patrones de ADC, V y ppm
-            val adcPattern = "\\\"ADC\\\"\\s*:\\s*(\\d+)".toRegex()
-            val voltagePattern = "\\\"V\\\"\\s*:\\s*([0-9.]+)".toRegex()
-            val ppmPattern = "\\\"ppm\\\"\\s*:\\s*([0-9.]+)".toRegex()
-
-            // Map para almacenar valores encontrados
-            val values = mutableMapOf<String, Any>()
-
-            // Intentar encontrar valores
-            adcPattern.find(fragment)?.let {
-                values["ADC"] = it.groupValues[1].toInt()
-            }
-
-            voltagePattern.find(fragment)?.let {
-                values["V"] = it.groupValues[1].toDouble()
-            }
-
-            ppmPattern.find(fragment)?.let {
-                values["ppm"] = it.groupValues[1].toDouble()
-            }
-
-            // Si tenemos al menos 2 de los 3 valores, reconstruimos el JSON
-            if (values.size >= 2) {
-                val reconstructed = StringBuilder("{")
-                values.entries.forEachIndexed { index, entry ->
-                    val key = entry.key
-                    val value = entry.value
-
-                    reconstructed.append("\"$key\":")
-                    when (value) {
-                        is Int -> reconstructed.append(value)
-                        is Double -> reconstructed.append(value)
-                        else -> reconstructed.append("\"$value\"")
-                    }
-
-                    if (index < values.size - 1) {
-                        reconstructed.append(",")
-                    }
-                }
-                reconstructed.append("}")
-
-                val jsonStr = reconstructed.toString()
-                Log.d(TAG, "JSON reconstruido de fragmentos: $jsonStr")
-
-                // Enviar a ViewModel
-                mainHandler.post {
-                    callbacks.onDataReceived(jsonStr)
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error al extraer valores de fragmento: ${e.message}")
         }
     }
 }

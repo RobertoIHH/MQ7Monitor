@@ -44,6 +44,10 @@ class GasSensorViewModel : ViewModel() {
     private val _currentGasType = mutableStateOf(GasType.CO)
     val currentGasType: State<GasType> = _currentGasType
 
+    // Estado para mostrar el proceso de cambio de gas
+    private val _isChangingGas = mutableStateOf(false)
+    val isChangingGas: State<Boolean> = _isChangingGas
+
     // Datos para los gráficos por tipo de gas
     val gasChartData = mutableMapOf(
         GasType.CO to mutableStateListOf<DataPoint>(),
@@ -56,8 +60,13 @@ class GasSensorViewModel : ViewModel() {
     // Datos para el gráfico de ADC (común para todos los gases)
     val adcChartData = mutableStateListOf<DataPoint>()
 
-    // Último timestamp para cada gas (para mostrar datos históricos)
+    // Último timestamp para cada gas y último gas recibido
     private val lastGasTimestamps = mutableMapOf<GasType, Long>()
+    private var lastGasReceived = GasType.CO
+
+    // Gas objetivo que hemos solicitado
+    private var targetGasType: GasType? = null
+    private var changeGasRequestTime: Long = 0
 
     private var bleManager: BLEManager? = null
     private val dataManager = SensorDataManager()
@@ -83,6 +92,11 @@ class GasSensorViewModel : ViewModel() {
                 minPPMValues[gasType] = Double.MAX_VALUE
                 maxPPMValues[gasType] = 0.0
                 lastGasTimestamps[gasType] = 0L
+
+                // Inicializar gráficos con puntos vacíos para prevenir NullPointerException
+                if (gasChartData[gasType] == null) {
+                    gasChartData[gasType] = mutableStateListOf()
+                }
             }
         }
     }
@@ -139,6 +153,21 @@ class GasSensorViewModel : ViewModel() {
                         val gasString = if (jsonData.has("gas")) jsonData.getString("gas") else "CO"
                         val gasType = GasType.fromString(gasString)
 
+                        // Esto es lo más importante: verificar si recibimos datos del gas objetivo
+                        if (targetGasType != null && gasType == targetGasType) {
+                            targetGasType = null  // Se logró el cambio de gas
+                            viewModelScope.launch(Dispatchers.Main) {
+                                _isChangingGas.value = false
+                            }
+                            Log.d("GasSensorViewModel", "¡Gas cambiado exitosamente a ${gasType.name}!")
+                        }
+
+                        // Detectar cambio de gas basado en los datos recibidos
+                        if (gasType != lastGasReceived) {
+                            Log.d("GasSensorViewModel", "Cambio de gas detectado: ${lastGasReceived.name} -> ${gasType.name}")
+                            lastGasReceived = gasType
+                        }
+
                         Log.d("GasSensorViewModel", "Datos procesados: ADC=$rawValue, V=$voltage, ppm=$ppm, gas=$gasType")
 
                         dataManager.updateData(rawValue, voltage, ppm, gasType)
@@ -151,18 +180,25 @@ class GasSensorViewModel : ViewModel() {
                             _rawValue.value = rawValue
                             _voltage.value = voltage
                             _ppmValue.value = ppm
-                            _currentGasType.value = gasType
+                            _currentGasType.value = gasType  // Actualizar el tipo de gas actual
 
                             // Actualizar los valores mínimos y máximos de ADC
                             _minADCValue.value = minOf(_minADCValue.value, rawValue)
                             _maxADCValue.value = maxOf(_maxADCValue.value, rawValue)
 
                             // Actualizar min/max para el gas actual
-                            minPPMValues[gasType] = minOf(minPPMValues[gasType] ?: Double.MAX_VALUE, ppm)
-                            maxPPMValues[gasType] = maxOf(maxPPMValues[gasType] ?: 0.0, ppm)
+                            if (minPPMValues.containsKey(gasType)) {
+                                minPPMValues[gasType] = minOf(minPPMValues[gasType] ?: Double.MAX_VALUE, ppm)
+                                maxPPMValues[gasType] = maxOf(maxPPMValues[gasType] ?: 0.0, ppm)
+                            }
 
-                            // Actualizar datos del gráfico para el gas específico
-                            val gasDataPoints = gasChartData[gasType] ?: return@launch
+                            // Actualizar datos del gráfico para el gas específico (verificar que gasChartData tenga la entrada)
+                            val gasDataPoints = gasChartData[gasType] ?: run {
+                                // Crear la entrada si no existe
+                                val newList = mutableStateListOf<DataPoint>()
+                                gasChartData[gasType] = newList
+                                newList
+                            }
 
                             if (gasDataPoints.size >= 60) {
                                 gasDataPoints.removeAt(0)
@@ -190,6 +226,12 @@ class GasSensorViewModel : ViewModel() {
                     Log.d("GasSensorViewModel", "Estado de conexión cambiado a: $connected")
                     _isConnected.value = connected
                     _connectionStatus.value = if (connected) "Conectado" else "Desconectado"
+
+                    // Resetear el estado de cambio de gas si nos desconectamos
+                    if (!connected) {
+                        _isChangingGas.value = false
+                        targetGasType = null
+                    }
                 }
             }
         })
@@ -202,6 +244,51 @@ class GasSensorViewModel : ViewModel() {
             Pair(min, max)
         } else {
             Pair(0.0, 100.0) // Valores por defecto
+        }
+    }
+
+    // Función para solicitar cambio de gas con mejoras
+    fun changeGasType(gasType: GasType) {
+        if (!_isConnected.value) {
+            Log.e("GasSensorViewModel", "No se puede cambiar el gas: dispositivo no conectado")
+            return
+        }
+
+        if (_isChangingGas.value) {
+            Log.e("GasSensorViewModel", "Ya se está cambiando el gas, espera un momento")
+            return
+        }
+
+        if (gasType == _currentGasType.value) {
+            Log.d("GasSensorViewModel", "Ya estamos midiendo este gas: ${gasType.name}")
+            return
+        }
+
+        Log.d("GasSensorViewModel", "Solicitando cambio a gas: ${gasType.name}")
+
+        // Marcar que estamos en proceso de cambio
+        _isChangingGas.value = true
+        targetGasType = gasType
+        changeGasRequestTime = System.currentTimeMillis()
+
+        // Enviar comando al dispositivo ESP32
+        bleManager?.sendGasTypeCommand(gasType)
+
+        // Programar un timeout para resetear el estado de cambio después de 5 segundos
+        // en caso de que no recibamos confirmación
+        viewModelScope.launch {
+            delay(5000)
+            if (_isChangingGas.value && targetGasType == gasType) {
+                // Si todavía estamos esperando cambiar a este gas específico después de 5 segundos
+                targetGasType = null
+                _isChangingGas.value = false
+
+                // MEJORA: Asumimos que el cambio se produjo pero no recibimos la confirmación
+                // Actualizamos el gas actual de todas formas para mejorar la experiencia de usuario
+                _currentGasType.value = gasType
+
+                Log.w("GasSensorViewModel", "Timeout al cambiar el gas")
+            }
         }
     }
 
@@ -273,12 +360,9 @@ class GasSensorViewModel : ViewModel() {
         bleManager?.disconnect()
     }
 
-    // Determinar si un gas tiene datos recientes (últimos 65 segundos)
-    fun hasRecentData(gasType: GasType): Boolean {
-        val lastTimestamp = lastGasTimestamps[gasType] ?: 0L
-        val currentTime = System.currentTimeMillis()
-        // Consideramos 65 segundos (un poco más que el intervalo de 60s) para asegurar que mostramos datos actuales
-        return (currentTime - lastTimestamp) < 65000
+    // Determinar si un gas tiene datos
+    fun hasGasData(gasType: GasType): Boolean {
+        return gasChartData[gasType]?.isNotEmpty() == true
     }
 
     override fun onCleared() {

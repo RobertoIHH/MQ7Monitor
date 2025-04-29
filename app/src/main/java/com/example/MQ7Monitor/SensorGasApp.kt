@@ -49,6 +49,7 @@ fun SensorGasApp(
     val isScanning by viewModel.isScanning
     val selectedDevice by viewModel.selectedDevice
     val currentGasType by viewModel.currentGasType
+    val isChangingGas by viewModel.isChangingGas
 
     // Importante: Usar DisposableEffect para efectos al montar y desmontar la composable
     DisposableEffect(Unit) {
@@ -211,6 +212,15 @@ fun SensorGasApp(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                         )
                     }
+
+                    // Indicador de cambio de gas
+                    if (isChangingGas) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -226,10 +236,12 @@ fun SensorGasApp(
             }
         }
 
-        // Panel de selección de gases para ver gráficos
-        GasTabSelector(
+        // Panel de selección de gases para cambiar el tipo de gas
+        GasSelector(
             viewModel = viewModel,
             currentGasType = currentGasType,
+            isConnected = isConnected,
+            isChangingGas = isChangingGas,
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -269,78 +281,76 @@ fun SensorGasApp(
 }
 
 @Composable
-fun GasTabSelector(
+fun GasSelector(
     viewModel: GasSensorViewModel,
     currentGasType: GasType,
+    isConnected: Boolean,
+    isChangingGas: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val scrollableTabRowState = rememberScrollState()
+    val scrollState = rememberScrollState()
 
-    Row(
-        modifier = modifier
-            .horizontalScroll(scrollableTabRowState)
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        GasType.values().forEach { gasType ->
-            if (gasType != GasType.UNKNOWN) {
-                val hasRecentData = viewModel.hasRecentData(gasType)
-                val isSelected = gasType == currentGasType
+    Column(modifier = modifier) {
+        Text(
+            text = "Seleccionar gas a medir:",
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(vertical = 4.dp)
+        )
 
-                TabChip(
-                    gasType = gasType,
-                    isSelected = isSelected,
-                    hasData = hasRecentData,
-                    onClick = {
-                        // Solo permitir cambiar a pestañas que tienen datos
-                        if (hasRecentData || gasType == currentGasType) {
-                            viewModel.gasChartData[gasType]?.let {
-                                // Cambiar el estado del gas actual temporalmente para ver sus datos
-                                // Esto es solo para la UI, no afecta los datos que se reciben
-                                val field = viewModel::class.java.getDeclaredField("_currentGasType")
-                                field.isAccessible = true
-                                val mutableState = field.get(viewModel) as MutableState<GasType>
-                                mutableState.value = gasType
-                            }
+        Row(
+            modifier = Modifier
+                .horizontalScroll(scrollState)
+                .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            GasType.values().forEach { gasType ->
+                if (gasType != GasType.UNKNOWN) {
+                    val isSelected = gasType == currentGasType
+
+                    GasButton(
+                        gasType = gasType,
+                        isSelected = isSelected,
+                        enabled = isConnected && !isChangingGas,
+                        onClick = {
+                            Log.d("GasSelector", "Cambiando a gas: ${gasType.name}")
+                            viewModel.changeGasType(gasType)
                         }
-                    }
-                )
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-fun TabChip(
+fun GasButton(
     gasType: GasType,
     isSelected: Boolean,
-    hasData: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit
 ) {
-    val backgroundColor = if (isSelected) {
+    val buttonColor = if (isSelected) {
         gasColors[gasType] ?: Color.Gray
     } else {
         Color.LightGray.copy(alpha = 0.5f)
     }
 
-    val textColor = if (isSelected) {
-        Color.White
-    } else {
-        if (hasData) Color.Black else Color.Gray
-    }
-
-    Surface(
-        modifier = Modifier
-            .clickable(enabled = hasData || isSelected) { onClick() },
+    Button(
+        onClick = onClick,
+        enabled = enabled && !isSelected, // Deshabilitar el botón del gas ya seleccionado
+        colors = ButtonDefaults.buttonColors(
+            containerColor = buttonColor,
+            disabledContainerColor = if (isSelected) buttonColor else Color.Gray.copy(alpha = 0.3f)
+        ),
         shape = RoundedCornerShape(16.dp),
-        color = backgroundColor,
-        shadowElevation = if (isSelected) 2.dp else 0.dp
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.height(36.dp)
     ) {
         Text(
             text = gasType.name,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            color = textColor,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+            color = if (isSelected) Color.White else Color.Black,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+            fontSize = 12.sp
         )
     }
 }
