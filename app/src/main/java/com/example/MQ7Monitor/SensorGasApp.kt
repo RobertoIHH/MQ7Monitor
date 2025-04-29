@@ -24,7 +24,6 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -220,6 +219,12 @@ fun SensorGasApp(
                             modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp
                         )
+                        Text(
+                            text = "Cambiando...",
+                            color = Color.Gray,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
                     }
                 }
 
@@ -270,11 +275,25 @@ fun SensorGasApp(
                     viewModel = viewModel
                 )
             } else {
-                Text(
-                    text = "Esperando datos de ${currentGasType.name}...",
+                Column(
                     modifier = Modifier.align(Alignment.Center),
-                    color = Color.Gray
-                )
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Esperando datos de ${currentGasType.name}...",
+                        color = Color.Gray
+                    )
+
+                    // Añadir mensaje de ayuda si estamos conectados pero no hay datos
+                    if (isConnected && !isChangingGas) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Selecciona otro gas y luego regresa a este",
+                            fontSize = 12.sp,
+                            color = Color.Gray
+                        )
+                    }
+                }
             }
         }
     }
@@ -618,10 +637,4 @@ fun MultiGasLineChart(
             }
         )
     }
-}
-
-@Preview
-@Composable
-fun SensorGasAppPreview() {
-    // Esta es solo una vista previa y no funcional
 }

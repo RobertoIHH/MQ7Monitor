@@ -24,7 +24,7 @@ class GasSensorViewModel : ViewModel() {
     private val _isScanning = mutableStateOf(false)
     val isScanning: State<Boolean> = _isScanning
 
-    // Esta es la clave: usar mutableStateListOf y exponerlo directamente
+    // Lista de dispositivos
     val deviceList = mutableStateListOf<DeviceInfo>()
 
     private val _selectedDevice = mutableStateOf<BluetoothDevice?>(null)
@@ -60,9 +60,9 @@ class GasSensorViewModel : ViewModel() {
     // Datos para el gráfico de ADC (común para todos los gases)
     val adcChartData = mutableStateListOf<DataPoint>()
 
-    // Último timestamp para cada gas y último gas recibido
+    // Último timestamp para cada gas
     private val lastGasTimestamps = mutableMapOf<GasType, Long>()
-    private var lastGasReceived = GasType.CO
+    private var lastUpdateTime = 0L
 
     // Gas objetivo que hemos solicitado
     private var targetGasType: GasType? = null
@@ -93,10 +93,25 @@ class GasSensorViewModel : ViewModel() {
                 maxPPMValues[gasType] = 0.0
                 lastGasTimestamps[gasType] = 0L
 
-                // Inicializar gráficos con puntos vacíos para prevenir NullPointerException
+                // Inicializar gráficos con puntos vacíos
                 if (gasChartData[gasType] == null) {
                     gasChartData[gasType] = mutableStateListOf()
                 }
+
+                // Añadir algunos puntos iniciales (esto hace que los gráficos se muestren incluso sin datos)
+                val initialPoints = gasChartData[gasType] ?: mutableStateListOf()
+                if (initialPoints.isEmpty()) {
+                    for (i in 0 until 5) {
+                        initialPoints.add(DataPoint(i.toFloat(), 0.0f))
+                    }
+                }
+            }
+        }
+
+        // Inicializar gráfico ADC con datos iniciales
+        if (adcChartData.isEmpty()) {
+            for (i in 0 until 5) {
+                adcChartData.add(DataPoint(i.toFloat(), 0.0f))
             }
         }
     }
@@ -135,6 +150,7 @@ class GasSensorViewModel : ViewModel() {
             override fun onDataReceived(data: String) {
                 try {
                     Log.d("GasSensorViewModel", "Datos JSON recibidos: $data")
+                    lastUpdateTime = System.currentTimeMillis()
 
                     // Validar que el JSON esté completo
                     if (!data.startsWith("{") || !data.endsWith("}")) {
@@ -144,6 +160,31 @@ class GasSensorViewModel : ViewModel() {
 
                     val jsonData = JSONObject(data)
 
+                    // Verificar si es una respuesta de confirmación de cambio de gas
+                    if (jsonData.has("command") && jsonData.getString("command") == "gas_changed") {
+                        val toGas = jsonData.getString("to")
+                        val success = jsonData.getBoolean("success")
+
+                        Log.d("GasSensorViewModel", "Recibida confirmación de cambio de gas a $toGas, éxito: $success")
+
+                        if (success) {
+                            val gasType = GasType.fromString(toGas)
+
+                            // Actualizar en el hilo principal
+                            viewModelScope.launch(Dispatchers.Main) {
+                                _currentGasType.value = gasType
+                                targetGasType = null
+                                _isChangingGas.value = false
+
+                                // Forzar actualización de la UI
+                                _ppmValue.value = _ppmValue.value
+                            }
+                        }
+
+                        return
+                    }
+
+                    // Procesar datos normales del sensor
                     if (jsonData.has("ADC") && jsonData.has("V") && jsonData.has("ppm")) {
                         val rawValue = jsonData.getInt("ADC")
                         val voltage = jsonData.getDouble("V")
@@ -153,19 +194,15 @@ class GasSensorViewModel : ViewModel() {
                         val gasString = if (jsonData.has("gas")) jsonData.getString("gas") else "CO"
                         val gasType = GasType.fromString(gasString)
 
-                        // Esto es lo más importante: verificar si recibimos datos del gas objetivo
+                        // Verificar si recibimos datos del gas objetivo
                         if (targetGasType != null && gasType == targetGasType) {
-                            targetGasType = null  // Se logró el cambio de gas
+                            Log.d("GasSensorViewModel", "¡Recibidos datos del gas objetivo ${gasType.name}!")
+
                             viewModelScope.launch(Dispatchers.Main) {
+                                _currentGasType.value = gasType
+                                targetGasType = null
                                 _isChangingGas.value = false
                             }
-                            Log.d("GasSensorViewModel", "¡Gas cambiado exitosamente a ${gasType.name}!")
-                        }
-
-                        // Detectar cambio de gas basado en los datos recibidos
-                        if (gasType != lastGasReceived) {
-                            Log.d("GasSensorViewModel", "Cambio de gas detectado: ${lastGasReceived.name} -> ${gasType.name}")
-                            lastGasReceived = gasType
                         }
 
                         Log.d("GasSensorViewModel", "Datos procesados: ADC=$rawValue, V=$voltage, ppm=$ppm, gas=$gasType")
@@ -180,7 +217,11 @@ class GasSensorViewModel : ViewModel() {
                             _rawValue.value = rawValue
                             _voltage.value = voltage
                             _ppmValue.value = ppm
-                            _currentGasType.value = gasType  // Actualizar el tipo de gas actual
+
+                            // IMPORTANTE: Solo actualizar el gas actual si no estamos en proceso de cambio
+                            if (!_isChangingGas.value) {
+                                _currentGasType.value = gasType
+                            }
 
                             // Actualizar los valores mínimos y máximos de ADC
                             _minADCValue.value = minOf(_minADCValue.value, rawValue)
@@ -192,9 +233,8 @@ class GasSensorViewModel : ViewModel() {
                                 maxPPMValues[gasType] = maxOf(maxPPMValues[gasType] ?: 0.0, ppm)
                             }
 
-                            // Actualizar datos del gráfico para el gas específico (verificar que gasChartData tenga la entrada)
+                            // Actualizar datos del gráfico para el gas específico
                             val gasDataPoints = gasChartData[gasType] ?: run {
-                                // Crear la entrada si no existe
                                 val newList = mutableStateListOf<DataPoint>()
                                 gasChartData[gasType] = newList
                                 newList
@@ -288,6 +328,26 @@ class GasSensorViewModel : ViewModel() {
                 _currentGasType.value = gasType
 
                 Log.w("GasSensorViewModel", "Timeout al cambiar el gas")
+
+                // Actualizar manualmente los datos si no hemos recibido datos en los últimos 5 segundos
+                if (System.currentTimeMillis() - lastUpdateTime > 5000) {
+                    Log.d("GasSensorViewModel", "Actualizando datos manualmente después del timeout")
+
+                    // Solo actualizar los datos si hay datos antiguos para este gas
+                    val gasDataPoints = gasChartData[gasType]
+                    if (gasDataPoints != null && gasDataPoints.isNotEmpty()) {
+                        val lastPoint = gasDataPoints.last()
+
+                        // Añadir un nuevo punto similar para mantener la continuidad
+                        if (gasDataPoints.size >= 60) {
+                            gasDataPoints.removeAt(0)
+                        }
+                        gasDataPoints.add(DataPoint(gasDataPoints.size.toFloat(), lastPoint.y))
+
+                        // Actualizar los valores mostrados
+                        _ppmValue.value = lastPoint.y.toDouble()
+                    }
+                }
             }
         }
     }
@@ -362,7 +422,8 @@ class GasSensorViewModel : ViewModel() {
 
     // Determinar si un gas tiene datos
     fun hasGasData(gasType: GasType): Boolean {
-        return gasChartData[gasType]?.isNotEmpty() == true
+        val dataPoints = gasChartData[gasType]
+        return dataPoints != null && dataPoints.isNotEmpty() && dataPoints.any { it.y > 0 }
     }
 
     override fun onCleared() {
