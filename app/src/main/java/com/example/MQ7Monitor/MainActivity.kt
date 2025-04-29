@@ -69,6 +69,10 @@ class MainActivity : ComponentActivity() {
             override fun onConnectionStateChange(connected: Boolean) {
                 // Se manejará en el ViewModel
             }
+
+            override fun onStatusUpdate(statusJson: String) {
+                // Se manejará en el ViewModel
+            }
         })
 
         setContent {
@@ -155,6 +159,18 @@ class MainActivity : ComponentActivity() {
 
         Log.d("MainActivity", "Iniciando escaneo desde MainActivity")
         viewModel?.startScan()
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_ENABLE_BT) {
+            if (resultCode == RESULT_OK) {
+                Log.d("MainActivity", "Bluetooth activado, iniciando escaneo")
+                startBleScan()
+            } else {
+                Log.d("MainActivity", "El usuario rechazó activar Bluetooth")
+            }
+        }
     }
 
     override fun onDestroy() {

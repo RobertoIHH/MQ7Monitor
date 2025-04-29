@@ -49,6 +49,7 @@ fun SensorGasApp(
     val selectedDevice by viewModel.selectedDevice
     val currentGasType by viewModel.currentGasType
     val isChangingGas by viewModel.isChangingGas
+    val statusMessage by viewModel.statusMessage
 
     // Importante: Usar DisposableEffect para efectos al montar y desmontar la composable
     DisposableEffect(Unit) {
@@ -111,7 +112,7 @@ fun SensorGasApp(
             }
         }
 
-        // Estado de conexión
+        // Estado de conexión y mensaje de estado
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -125,6 +126,18 @@ fun SensorGasApp(
                 text = connectionStatus,
                 color = if (isConnected) Color.Green else Color.Red
             )
+
+            // Mensaje de estado dinámico
+            if (statusMessage.isNotEmpty()) {
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(
+                    text = statusMessage,
+                    color = Color.DarkGray,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
 
         //lista Disp
@@ -237,7 +250,11 @@ fun SensorGasApp(
 
                 Text(text = "ADC: $rawValue")
                 Text(text = "Voltaje: ${String.format("%.2f", voltage)} V")
-                Text(text = "PPM: ${String.format("%.2f", ppmValue)} ppm")
+                Text(
+                    text = "PPM: ${String.format("%.2f", ppmValue)} ppm",
+                    fontWeight = FontWeight.Bold,
+                    color = gasColors[currentGasType] ?: Color.Black
+                )
             }
         }
 

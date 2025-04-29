@@ -24,7 +24,6 @@ import androidx.core.app.ActivityCompat
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.regex.Pattern
 
 class BLEManager(private val context: Context, private var callbacks: BLECallbacks) {
     companion object {
@@ -34,6 +33,7 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
         private val SERVICE_UUID = UUID.fromString("4fafc201-1fb5-459e-8fcc-c5c9c331914b")
         private val CHARACTERISTIC_UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a8")
         private val COMMAND_CHAR_UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a9")
+        private val STATUS_CHAR_UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26aa")
         private val DESCRIPTOR_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         private const val SCAN_PERIOD = 30000L // 30 segundos
@@ -47,6 +47,7 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
     private var bluetoothGatt: BluetoothGatt? = null
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
     private var commandCharacteristic: BluetoothGattCharacteristic? = null
+    private var statusCharacteristic: BluetoothGattCharacteristic? = null
     private val scanHandler = Handler(Looper.getMainLooper())
     private val mainHandler = Handler(Looper.getMainLooper())
     private var isScanning = false
@@ -65,6 +66,9 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
         fun onDeviceFound(device: BluetoothDevice, rssi: Int)
         fun onDataReceived(data: String)
         fun onConnectionStateChange(connected: Boolean)
+
+        // Nuevo método para recibir actualizaciones de estado
+        fun onStatusUpdate(statusJson: String)
     }
 
     fun setCallbacks(callbacks: BLECallbacks) {
@@ -221,14 +225,15 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
 
             if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
                 == PackageManager.PERMISSION_GRANTED) {
-                // Crear comando basado en el tipo de gas
-                val command = "${gasType.name}:"
+                // Crear comando basado en el tipo de gas con timestamp para confirmación
+                val timestamp = System.currentTimeMillis()
+                val command = "${gasType.name}:$timestamp"
 
                 // Convertir a bytes y enviar
                 commandCharacteristic?.setValue(command.toByteArray(StandardCharsets.UTF_8))
                 val success = bluetoothGatt?.writeCharacteristic(commandCharacteristic)
 
-                Log.d(TAG, "Enviando comando para cambiar a gas ${gasType.name}: $success")
+                Log.d(TAG, "Enviando comando para cambiar a gas ${gasType.name} (timestamp: $timestamp): $success")
             } else {
                 Log.e(TAG, "Permiso BLUETOOTH_CONNECT no concedido")
             }
@@ -236,6 +241,28 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
             Log.e(TAG, "Error de seguridad al enviar comando: ${e.message}")
         } catch (e: Exception) {
             Log.e(TAG, "Error al enviar comando: ${e.message}")
+        }
+    }
+
+    // Leer el estado actual del sensor
+    fun readSensorStatus() {
+        try {
+            if (statusCharacteristic == null) {
+                Log.e(TAG, "No se puede leer estado: característica de estado no disponible")
+                return
+            }
+
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED) {
+                val success = bluetoothGatt?.readCharacteristic(statusCharacteristic)
+                Log.d(TAG, "Solicitando estado del sensor: $success")
+            } else {
+                Log.e(TAG, "Permiso BLUETOOTH_CONNECT no concedido")
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Error de seguridad al leer estado: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error al leer estado: ${e.message}")
         }
     }
 
@@ -289,6 +316,7 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
                     // Obtener características
                     dataCharacteristic = service.getCharacteristic(CHARACTERISTIC_UUID)
                     commandCharacteristic = service.getCharacteristic(COMMAND_CHAR_UUID)
+                    statusCharacteristic = service.getCharacteristic(STATUS_CHAR_UUID)
 
                     if (dataCharacteristic != null) {
                         try {
@@ -319,9 +347,18 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
                                     Log.d(TAG, "Notificaciones habilitadas para datos")
                                 }
 
+                                // Leer el estado inicial del sensor
+                                if (statusCharacteristic != null) {
+                                    mainHandler.postDelayed({
+                                        readSensorStatus()
+                                    }, 500) // Pequeña espera para estabilizar la conexión
+                                }
+
                                 Log.d(
                                     TAG,
-                                    "Características encontradas: Data=${dataCharacteristic != null}, Command=${commandCharacteristic != null}"
+                                    "Características encontradas: Data=${dataCharacteristic != null}, " +
+                                            "Command=${commandCharacteristic != null}, " +
+                                            "Status=${statusCharacteristic != null}"
                                 )
                             }
                         } catch (e: SecurityException) {
@@ -334,11 +371,139 @@ class BLEManager(private val context: Context, private var callbacks: BLECallbac
                     if (commandCharacteristic == null) {
                         Log.e(TAG, "No se encontró la característica de comandos")
                     }
+
+                    if (statusCharacteristic == null) {
+                        Log.e(TAG, "No se encontró la característica de estado")
+                    }
                 } else {
                     Log.e(TAG, "No se encontró el servicio")
                 }
             } else {
                 Log.e(TAG, "Error al descubrir servicios: $status")
+            }
+        }
+
+        // Este método es para Android 12 (API 31) y superior
+        override fun onCharacteristicRead(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+            status: Int
+        ) {
+            super.onCharacteristicRead(gatt, characteristic, value, status)
+
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                when (characteristic.uuid) {
+                    STATUS_CHAR_UUID -> {
+                        val statusJson = String(value, StandardCharsets.UTF_8)
+                        Log.d(TAG, "Leído estado: $statusJson")
+
+                        mainHandler.post {
+                            callbacks.onStatusUpdate(statusJson)
+                        }
+                    }
+                    else -> {
+                        Log.d(TAG, "Leída característica desconocida: ${characteristic.uuid}")
+                    }
+                }
+            } else {
+                Log.e(TAG, "Error al leer característica: $status")
+            }
+        }
+
+        // Este método es para Android 11 (API 30) y anteriores
+        @Deprecated("Deprecated in Java")
+        override fun onCharacteristicRead(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            super.onCharacteristicRead(gatt, characteristic, status)
+
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    when (characteristic.uuid) {
+                        STATUS_CHAR_UUID -> {
+                            val value = characteristic.value
+                            if (value != null) {
+                                val statusJson = String(value, StandardCharsets.UTF_8)
+                                Log.d(TAG, "Leído estado (compat): $statusJson")
+
+                                mainHandler.post {
+                                    callbacks.onStatusUpdate(statusJson)
+                                }
+                            }
+                        }
+                        else -> {
+                            Log.d(TAG, "Leída característica desconocida: ${characteristic.uuid}")
+                        }
+                    }
+                } else {
+                    Log.e(TAG, "Error al leer característica: $status")
+                }
+            }
+        }
+
+        // Este método es para Android 12 (API 31) y superior
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
+        ) {
+            super.onCharacteristicChanged(gatt, characteristic, value)
+
+            when (characteristic.uuid) {
+                CHARACTERISTIC_UUID -> {
+                    // Datos del sensor recibidos
+                    val dataString = String(value, StandardCharsets.UTF_8)
+                    Log.d(TAG, "Datos recibidos: $dataString")
+
+                    // Verificar que sea un JSON completo (empieza con { y termina con })
+                    if (dataString.trim().startsWith("{") && dataString.trim().endsWith("}")) {
+                        mainHandler.post {
+                            callbacks.onDataReceived(dataString)
+                        }
+                    } else {
+                        Log.e(TAG, "Datos recibidos no son un JSON válido: $dataString")
+                    }
+                }
+                else -> {
+                    Log.d(TAG, "Notificación de característica desconocida: ${characteristic.uuid}")
+                }
+            }
+        }
+
+        // Este método es para Android 11 (API 30) y anteriores
+        @Deprecated("Deprecated in Java")
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            super.onCharacteristicChanged(gatt, characteristic)
+
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                when (characteristic.uuid) {
+                    CHARACTERISTIC_UUID -> {
+                        // Datos del sensor recibidos
+                        val value = characteristic.value
+                        if (value != null) {
+                            val dataString = String(value, StandardCharsets.UTF_8)
+                            Log.d(TAG, "Datos recibidos (compat): $dataString")
+
+                            // Verificar que sea un JSON completo (empieza con { y termina con })
+                            if (dataString.trim().startsWith("{") && dataString.trim().endsWith("}")) {
+                                mainHandler.post {
+                                    callbacks.onDataReceived(dataString)
+                                }
+                            } else {
+                                Log.e(TAG, "Datos recibidos no son un JSON válido: $dataString")
+                            }
+                        }
+                    }
+                    else -> {
+                        Log.d(TAG, "Notificación de característica desconocida: ${characteristic.uuid}")
+                    }
+                }
             }
         }
     }

@@ -48,6 +48,10 @@ class GasSensorViewModel : ViewModel() {
     private val _isChangingGas = mutableStateOf(false)
     val isChangingGas: State<Boolean> = _isChangingGas
 
+    // Mensaje de estado para mostrar información al usuario
+    private val _statusMessage = mutableStateOf("")
+    val statusMessage: State<String> = _statusMessage
+
     // Datos para los gráficos por tipo de gas
     val gasChartData = mutableMapOf(
         GasType.CO to mutableStateListOf<DataPoint>(),
@@ -67,6 +71,7 @@ class GasSensorViewModel : ViewModel() {
     // Gas objetivo que hemos solicitado
     private var targetGasType: GasType? = null
     private var changeGasRequestTime: Long = 0
+    private var lastChangeGasTimestamp: String = ""
 
     private var bleManager: BLEManager? = null
     private val dataManager = SensorDataManager()
@@ -164,8 +169,10 @@ class GasSensorViewModel : ViewModel() {
                     if (jsonData.has("command") && jsonData.getString("command") == "gas_changed") {
                         val toGas = jsonData.getString("to")
                         val success = jsonData.getBoolean("success")
+                        val timestamp = if (jsonData.has("timestamp")) jsonData.getLong("timestamp").toString() else ""
+                        val requestedGas = if (jsonData.has("requested")) jsonData.getString("requested") else ""
 
-                        Log.d("GasSensorViewModel", "Recibida confirmación de cambio de gas a $toGas, éxito: $success")
+                        Log.d("GasSensorViewModel", "Recibida confirmación de cambio de gas a $toGas (solicitado: $requestedGas), éxito: $success")
 
                         if (success) {
                             val gasType = GasType.fromString(toGas)
@@ -175,9 +182,35 @@ class GasSensorViewModel : ViewModel() {
                                 _currentGasType.value = gasType
                                 targetGasType = null
                                 _isChangingGas.value = false
+                                _statusMessage.value = "Cambiado a gas ${gasType.name}"
 
                                 // Forzar actualización de la UI
                                 _ppmValue.value = _ppmValue.value
+                            }
+                        } else {
+                            // Error al cambiar el gas
+                            viewModelScope.launch(Dispatchers.Main) {
+                                _statusMessage.value = "Error al cambiar a gas $requestedGas"
+                                _isChangingGas.value = false
+                                targetGasType = null
+                            }
+                        }
+                        return
+
+                        // Procesar el mensaje de estado
+                    } else if (jsonData.has("status") && jsonData.getString("status") == "ok" && jsonData.has("current_gas")) {
+                        val currentGas = jsonData.getString("current_gas")
+                        val gasIndex = if (jsonData.has("gas_index")) jsonData.getInt("gas_index") else -1
+
+                        Log.d("GasSensorViewModel", "Recibido estado: gas actual=$currentGas, índice=$gasIndex")
+
+                        // Actualizar el tipo de gas actual si no estamos en proceso de cambio
+                        val gasType = GasType.fromString(currentGas)
+
+                        viewModelScope.launch(Dispatchers.Main) {
+                            if (!_isChangingGas.value) {
+                                _currentGasType.value = gasType
+                                _statusMessage.value = "Gas detectado: ${gasType.name}"
                             }
                         }
 
@@ -267,11 +300,52 @@ class GasSensorViewModel : ViewModel() {
                     _isConnected.value = connected
                     _connectionStatus.value = if (connected) "Conectado" else "Desconectado"
 
+                    // Actualizar mensaje de estado
+                    if (connected) {
+                        _statusMessage.value = "Conectado. Solicitando datos del sensor..."
+                        delay(1000)
+                        // Leer el estado actual después de conectar
+                        bleManager?.readSensorStatus()
+                    } else {
+                        _statusMessage.value = "Desconectado"
+                    }
+
                     // Resetear el estado de cambio de gas si nos desconectamos
                     if (!connected) {
                         _isChangingGas.value = false
                         targetGasType = null
                     }
+                }
+            }
+
+            override fun onStatusUpdate(statusJson: String) {
+                try {
+                    Log.d("GasSensorViewModel", "Actualización de estado recibida: $statusJson")
+
+                    // Validar que el JSON esté completo
+                    if (!statusJson.startsWith("{") || !statusJson.endsWith("}")) {
+                        Log.e("GasSensorViewModel", "JSON de estado incompleto: $statusJson")
+                        return
+                    }
+
+                    val jsonData = JSONObject(statusJson)
+
+                    if (jsonData.has("status") && jsonData.getString("status") == "ok") {
+                        if (jsonData.has("current_gas")) {
+                            val currentGas = jsonData.getString("current_gas")
+                            val gasType = GasType.fromString(currentGas)
+
+                            viewModelScope.launch(Dispatchers.Main) {
+                                // Solo actualizar si no estamos cambiando de gas activamente
+                                if (!_isChangingGas.value) {
+                                    _currentGasType.value = gasType
+                                    _statusMessage.value = "Estado: midiendo ${gasType.name}"
+                                }
+                            }
+                        }
+                    }
+                } catch (e: JSONException) {
+                    Log.e("GasSensorViewModel", "Error al procesar JSON de estado: ${e.message}")
                 }
             }
         })
@@ -291,25 +365,30 @@ class GasSensorViewModel : ViewModel() {
     fun changeGasType(gasType: GasType) {
         if (!_isConnected.value) {
             Log.e("GasSensorViewModel", "No se puede cambiar el gas: dispositivo no conectado")
+            _statusMessage.value = "Error: No conectado"
             return
         }
 
         if (_isChangingGas.value) {
             Log.e("GasSensorViewModel", "Ya se está cambiando el gas, espera un momento")
+            _statusMessage.value = "Espera, ya se está cambiando el gas..."
             return
         }
 
         if (gasType == _currentGasType.value) {
             Log.d("GasSensorViewModel", "Ya estamos midiendo este gas: ${gasType.name}")
+            _statusMessage.value = "Ya estamos midiendo ${gasType.name}"
             return
         }
 
         Log.d("GasSensorViewModel", "Solicitando cambio a gas: ${gasType.name}")
+        _statusMessage.value = "Solicitando cambio a ${gasType.name}..."
 
         // Marcar que estamos en proceso de cambio
         _isChangingGas.value = true
         targetGasType = gasType
         changeGasRequestTime = System.currentTimeMillis()
+        lastChangeGasTimestamp = System.currentTimeMillis().toString()
 
         // Enviar comando al dispositivo ESP32
         bleManager?.sendGasTypeCommand(gasType)
@@ -326,8 +405,12 @@ class GasSensorViewModel : ViewModel() {
                 // MEJORA: Asumimos que el cambio se produjo pero no recibimos la confirmación
                 // Actualizamos el gas actual de todas formas para mejorar la experiencia de usuario
                 _currentGasType.value = gasType
+                _statusMessage.value = "Cambiado a ${gasType.name} (sin confirmación)"
 
                 Log.w("GasSensorViewModel", "Timeout al cambiar el gas")
+
+                // Volver a leer el estado para verificar
+                bleManager?.readSensorStatus()
 
                 // Actualizar manualmente los datos si no hemos recibido datos en los últimos 5 segundos
                 if (System.currentTimeMillis() - lastUpdateTime > 5000) {
@@ -363,6 +446,7 @@ class GasSensorViewModel : ViewModel() {
 
             // Actualizar estado de escaneo
             _isScanning.value = true
+            _statusMessage.value = "Buscando dispositivos..."
 
             // Log después de limpiar
             Log.d("GasSensorViewModel", "Lista limpiada, ahora tiene ${deviceList.size} dispositivos")
@@ -372,6 +456,7 @@ class GasSensorViewModel : ViewModel() {
         if (bleManager == null) {
             Log.e("GasSensorViewModel", "Error: bleManager es nulo")
             _isScanning.value = false
+            _statusMessage.value = "Error: no se pudo iniciar el escaneo"
             return
         }
 
@@ -393,6 +478,13 @@ class GasSensorViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.Main) {
             bleManager?.stopScan()
             _isScanning.value = false
+
+            if (deviceList.isEmpty()) {
+                _statusMessage.value = "No se encontraron dispositivos"
+            } else {
+                _statusMessage.value = "Selecciona un dispositivo para conectar"
+            }
+
             Log.d("GasSensorViewModel", "Escaneo detenido. Lista tiene ${deviceList.size} dispositivos.")
         }
     }
@@ -401,8 +493,10 @@ class GasSensorViewModel : ViewModel() {
         val btDevice = bleManager?.getDeviceByAddress(device.address)
         if (btDevice != null) {
             _selectedDevice.value = btDevice
+            _statusMessage.value = "Dispositivo seleccionado: ${device.name}"
             Log.d("GasSensorViewModel", "Dispositivo seleccionado: ${device.name}")
         } else {
+            _statusMessage.value = "Error al seleccionar dispositivo"
             Log.e("GasSensorViewModel", "No se pudo encontrar el dispositivo BLE para la dirección: ${device.address}")
         }
     }
@@ -410,6 +504,7 @@ class GasSensorViewModel : ViewModel() {
     fun connectToDevice() {
         _selectedDevice.value?.let { device ->
             _connectionStatus.value = "Conectando..."
+            _statusMessage.value = "Conectando a ${device.name ?: device.address}..."
             Log.d("GasSensorViewModel", "Intentando conectar a: ${device.address}")
             bleManager?.connectToDevice(device)
         }
@@ -417,6 +512,7 @@ class GasSensorViewModel : ViewModel() {
 
     fun disconnectDevice() {
         Log.d("GasSensorViewModel", "Desconectando...")
+        _statusMessage.value = "Desconectando..."
         bleManager?.disconnect()
     }
 
