@@ -60,6 +60,18 @@ class GasSensorViewModel : ViewModel() {
     private val _maxADCValue = mutableStateOf(0)
     val maxADCValue: State<Int> = _maxADCValue
 
+    private fun handleGasTypeChange(newGasType: String) {
+        // Si es el mismo gas, no hacemos nada
+        if (_gasType.value == newGasType) return
+
+        // Registrar el cambio
+        Log.d("GasSensorViewModel", "Cambio de gas detectado: ${_gasType.value} -> $newGasType")
+
+        // Actualizar el tipo de gas
+        _gasType.value = newGasType
+    }
+
+
     fun setBleManager(manager: BLEManager) {
         bleManager = manager
 
@@ -111,31 +123,53 @@ class GasSensorViewModel : ViewModel() {
                         // Obtener el tipo de gas (nuevo)
                         val gasType = if (jsonData.has("gas")) jsonData.getString("gas") else "CO"
 
-                        Log.d("GasSensorViewModel", "Datos procesados: ADC=$rawValue, V=$voltage, ppm=$ppm, gas=$gasType")
+                        // Detectar cambio de gas
+                        val gasChanged = _gasType.value != gasType
 
+                        if (gasChanged) {
+                            Log.d("GasSensorViewModel", "Cambio de gas detectado: ${_gasType.value} -> $gasType")
+                        }
+
+                        // Actualizar datos en el manager
                         dataManager.updateData(rawValue, voltage, ppm, gasType)
 
                         // Actualizar en el hilo principal
                         viewModelScope.launch(Dispatchers.Main) {
+                            // Actualizar el tipo de gas actual
+                            _gasType.value = gasType
+
+                            // Actualizar los valores del sensor
                             _rawValue.value = rawValue
                             _voltage.value = voltage
                             _ppmValue.value = ppm
-                            _gasType.value = gasType
 
                             // Actualizar los valores mínimos y máximos de ADC
                             _minADCValue.value = minOf(_minADCValue.value, rawValue)
                             _maxADCValue.value = maxOf(_maxADCValue.value, rawValue)
 
+                            // Gestionar los datos para la gráfica
+
+                            // Limitar tamaño de datos
                             if (ppmChartData.size >= 60) {
                                 ppmChartData.removeAt(0)
                             }
-                            ppmChartData.add(DataPoint(ppmChartData.size.toFloat(), ppm.toFloat()))
+
+                            // Añadir nuevo punto de datos con el gas actual
+                            ppmChartData.add(DataPoint(
+                                x = ppmChartData.size.toFloat(),
+                                y = ppm.toFloat(),
+                                gasType = gasType
+                            ))
 
                             // Actualizar datos del gráfico (para ADC)
                             if (adcChartData.size >= 60) {
                                 adcChartData.removeAt(0)
                             }
-                            adcChartData.add(DataPoint(adcChartData.size.toFloat(), rawValue.toFloat()))
+                            adcChartData.add(DataPoint(
+                                x = adcChartData.size.toFloat(),
+                                y = rawValue.toFloat(),
+                                gasType = gasType
+                            ))
                         }
                     } else {
                         Log.e("GasSensorViewModel", "JSON no contiene los campos esperados: $data")
@@ -240,5 +274,6 @@ data class DeviceInfo(
 
 data class DataPoint(
     val x: Float,
-    val y: Float
+    val y: Float,
+    val gasType: String = "CO"  // Gas por defecto
 )
