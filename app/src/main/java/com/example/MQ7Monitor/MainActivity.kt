@@ -154,7 +154,7 @@ class MainActivity : ComponentActivity() {
         }
 
         Log.d("MainActivity", "Iniciando escaneo desde MainActivity")
-        bleManager.scanForDevices()
+        viewModel?.startScan()
     }
 
     override fun onDestroy() {

@@ -40,21 +40,52 @@ class GasSensorViewModel : ViewModel() {
     private val _ppmValue = mutableStateOf(0.0)
     val ppmValue: State<Double> = _ppmValue
 
-    // Datos para el gráfico
-    val ppmChartData = mutableStateListOf<DataPoint>()
+    // Tipo de gas actual
+    private val _currentGasType = mutableStateOf(GasType.CO)
+    val currentGasType: State<GasType> = _currentGasType
+
+    // Datos para los gráficos por tipo de gas
+    val gasChartData = mutableMapOf(
+        GasType.CO to mutableStateListOf<DataPoint>(),
+        GasType.H2 to mutableStateListOf<DataPoint>(),
+        GasType.LPG to mutableStateListOf<DataPoint>(),
+        GasType.CH4 to mutableStateListOf<DataPoint>(),
+        GasType.ALCOHOL to mutableStateListOf<DataPoint>()
+    )
+
+    // Datos para el gráfico de ADC (común para todos los gases)
     val adcChartData = mutableStateListOf<DataPoint>()
+
+    // Último timestamp para cada gas (para mostrar datos históricos)
+    private val lastGasTimestamps = mutableMapOf<GasType, Long>()
 
     private var bleManager: BLEManager? = null
     private val dataManager = SensorDataManager()
 
     // Conjunto para asegurar que no hay duplicados
     private val addedDeviceAddresses = mutableSetOf<String>()
-    //minos y maximos
+
+    // Mínimos y máximos para cada gas
+    private val minPPMValues = mutableMapOf<GasType, Double>()
+    private val maxPPMValues = mutableMapOf<GasType, Double>()
+
+    // Valores mínimos y máximos para ADC
     private val _minADCValue = mutableStateOf(4095)
     val minADCValue: State<Int> = _minADCValue
 
     private val _maxADCValue = mutableStateOf(0)
     val maxADCValue: State<Int> = _maxADCValue
+
+    init {
+        // Inicializar valores mínimos y máximos para cada gas
+        GasType.values().forEach { gasType ->
+            if (gasType != GasType.UNKNOWN) {
+                minPPMValues[gasType] = Double.MAX_VALUE
+                maxPPMValues[gasType] = 0.0
+                lastGasTimestamps[gasType] = 0L
+            }
+        }
+    }
 
     fun setBleManager(manager: BLEManager) {
         bleManager = manager
@@ -102,28 +133,43 @@ class GasSensorViewModel : ViewModel() {
                     if (jsonData.has("ADC") && jsonData.has("V") && jsonData.has("ppm")) {
                         val rawValue = jsonData.getInt("ADC")
                         val voltage = jsonData.getDouble("V")
-                        val ppm = jsonData.getDouble("ppm")  // Ya lo cambiaste a Double
+                        val ppm = jsonData.getDouble("ppm")
 
-                        Log.d("GasSensorViewModel", "Datos procesados: ADC=$rawValue, V=$voltage, ppm=$ppm")
+                        // Obtener el tipo de gas
+                        val gasString = if (jsonData.has("gas")) jsonData.getString("gas") else "CO"
+                        val gasType = GasType.fromString(gasString)
 
-                        dataManager.updateData(rawValue, voltage, ppm)
+                        Log.d("GasSensorViewModel", "Datos procesados: ADC=$rawValue, V=$voltage, ppm=$ppm, gas=$gasType")
+
+                        dataManager.updateData(rawValue, voltage, ppm, gasType)
+
+                        // Registrar timestamp para este gas
+                        lastGasTimestamps[gasType] = System.currentTimeMillis()
 
                         // Actualizar en el hilo principal
                         viewModelScope.launch(Dispatchers.Main) {
                             _rawValue.value = rawValue
                             _voltage.value = voltage
                             _ppmValue.value = ppm
+                            _currentGasType.value = gasType
 
                             // Actualizar los valores mínimos y máximos de ADC
                             _minADCValue.value = minOf(_minADCValue.value, rawValue)
                             _maxADCValue.value = maxOf(_maxADCValue.value, rawValue)
 
-                            if (ppmChartData.size >= 60) {
-                                ppmChartData.removeAt(0)
-                            }
-                            ppmChartData.add(DataPoint(ppmChartData.size.toFloat(), ppm.toFloat()))
+                            // Actualizar min/max para el gas actual
+                            minPPMValues[gasType] = minOf(minPPMValues[gasType] ?: Double.MAX_VALUE, ppm)
+                            maxPPMValues[gasType] = maxOf(maxPPMValues[gasType] ?: 0.0, ppm)
 
-// Actualizar datos del gráfico (para ADC)
+                            // Actualizar datos del gráfico para el gas específico
+                            val gasDataPoints = gasChartData[gasType] ?: return@launch
+
+                            if (gasDataPoints.size >= 60) {
+                                gasDataPoints.removeAt(0)
+                            }
+                            gasDataPoints.add(DataPoint(gasDataPoints.size.toFloat(), ppm.toFloat()))
+
+                            // Actualizar datos del gráfico para ADC (común)
                             if (adcChartData.size >= 60) {
                                 adcChartData.removeAt(0)
                             }
@@ -147,6 +193,16 @@ class GasSensorViewModel : ViewModel() {
                 }
             }
         })
+    }
+
+    fun getMinMaxPpmForGas(gasType: GasType): Pair<Double, Double> {
+        val min = minPPMValues[gasType] ?: 0.0
+        val max = maxPPMValues[gasType] ?: 100.0
+        return if (min != Double.MAX_VALUE && max > min) {
+            Pair(min, max)
+        } else {
+            Pair(0.0, 100.0) // Valores por defecto
+        }
     }
 
     fun startScan() {
@@ -215,6 +271,14 @@ class GasSensorViewModel : ViewModel() {
     fun disconnectDevice() {
         Log.d("GasSensorViewModel", "Desconectando...")
         bleManager?.disconnect()
+    }
+
+    // Determinar si un gas tiene datos recientes (últimos 65 segundos)
+    fun hasRecentData(gasType: GasType): Boolean {
+        val lastTimestamp = lastGasTimestamps[gasType] ?: 0L
+        val currentTime = System.currentTimeMillis()
+        // Consideramos 65 segundos (un poco más que el intervalo de 60s) para asegurar que mostramos datos actuales
+        return (currentTime - lastTimestamp) < 65000
     }
 
     override fun onCleared() {

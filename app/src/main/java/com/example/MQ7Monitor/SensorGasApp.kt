@@ -11,6 +11,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import android.util.Log
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -19,12 +21,23 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+
+// Colores para cada tipo de gas
+val gasColors = mapOf(
+    GasType.CO to Color(0xFF3366CC),       // Azul
+    GasType.H2 to Color(0xFFDC3912),       // Rojo
+    GasType.LPG to Color(0xFFFF9900),      // Naranja
+    GasType.CH4 to Color(0xFF109618),      // Verde
+    GasType.ALCOHOL to Color(0xFF990099),  // Morado
+    GasType.UNKNOWN to Color.Gray         // Gris para gases desconocidos
+)
 
 @Composable
 fun SensorGasApp(
@@ -35,6 +48,7 @@ fun SensorGasApp(
     val connectionStatus by viewModel.connectionStatus
     val isScanning by viewModel.isScanning
     val selectedDevice by viewModel.selectedDevice
+    val currentGasType by viewModel.currentGasType
 
     // Importante: Usar DisposableEffect para efectos al montar y desmontar la composable
     DisposableEffect(Unit) {
@@ -52,7 +66,7 @@ fun SensorGasApp(
     ) {
         // Título
         Text(
-            text = "Monitor de Sensor MQ7",
+            text = "Monitor Multisensor de Gases",
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -134,7 +148,7 @@ fun SensorGasApp(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(150.dp)
+                .height(120.dp)
                 .border(1.dp, Color.LightGray, RoundedCornerShape(4.dp))
                 .background(Color(0xFFF0F0F0))
         ) {
@@ -170,19 +184,38 @@ fun SensorGasApp(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp)
+                .padding(vertical = 4.dp)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp)
+                    .padding(12.dp)
             ) {
-                Text(
-                    text = "Datos del sensor:",
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
+                // Mostrar el tipo de gas actual
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Gas actual: ",
+                        fontWeight = FontWeight.Bold
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = gasColors[currentGasType] ?: Color.Gray,
+                        modifier = Modifier.padding(start = 4.dp)
+                    ) {
+                        Text(
+                            text = currentGasType.name,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
 
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Datos del sensor
                 val rawValue by viewModel.rawValue
                 val voltage by viewModel.voltage
                 val ppmValue by viewModel.ppmValue
@@ -193,11 +226,18 @@ fun SensorGasApp(
             }
         }
 
+        // Panel de selección de gases para ver gráficos
+        GasTabSelector(
+            viewModel = viewModel,
+            currentGasType = currentGasType,
+            modifier = Modifier.fillMaxWidth()
+        )
+
         // Gráfico en tiempo real
         Text(
             text = "Gráfico en tiempo real:",
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = 8.dp)
+            modifier = Modifier.padding(top = 4.dp)
         )
 
         Box(
@@ -207,19 +247,101 @@ fun SensorGasApp(
                 .border(1.dp, Color.LightGray, RoundedCornerShape(4.dp))
                 .padding(8.dp)
         ) {
-            if (viewModel.ppmChartData.isNotEmpty() || viewModel.adcChartData.isNotEmpty()) {
-                LineChart(
-                    ppmDataPoints = viewModel.ppmChartData,
-                    adcDataPoints = viewModel.adcChartData
+            // Mostrar gráfico del gas actual
+            val gasDataPoints = viewModel.gasChartData[currentGasType] ?: mutableStateListOf()
+
+            if (gasDataPoints.isNotEmpty() || viewModel.adcChartData.isNotEmpty()) {
+                MultiGasLineChart(
+                    ppmDataPoints = gasDataPoints,
+                    adcDataPoints = viewModel.adcChartData,
+                    gasType = currentGasType,
+                    viewModel = viewModel
                 )
             } else {
                 Text(
-                    text = "Esperando datos...",
+                    text = "Esperando datos de ${currentGasType.name}...",
                     modifier = Modifier.align(Alignment.Center),
                     color = Color.Gray
                 )
             }
         }
+    }
+}
+
+@Composable
+fun GasTabSelector(
+    viewModel: GasSensorViewModel,
+    currentGasType: GasType,
+    modifier: Modifier = Modifier
+) {
+    val scrollableTabRowState = rememberScrollState()
+
+    Row(
+        modifier = modifier
+            .horizontalScroll(scrollableTabRowState)
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        GasType.values().forEach { gasType ->
+            if (gasType != GasType.UNKNOWN) {
+                val hasRecentData = viewModel.hasRecentData(gasType)
+                val isSelected = gasType == currentGasType
+
+                TabChip(
+                    gasType = gasType,
+                    isSelected = isSelected,
+                    hasData = hasRecentData,
+                    onClick = {
+                        // Solo permitir cambiar a pestañas que tienen datos
+                        if (hasRecentData || gasType == currentGasType) {
+                            viewModel.gasChartData[gasType]?.let {
+                                // Cambiar el estado del gas actual temporalmente para ver sus datos
+                                // Esto es solo para la UI, no afecta los datos que se reciben
+                                val field = viewModel::class.java.getDeclaredField("_currentGasType")
+                                field.isAccessible = true
+                                val mutableState = field.get(viewModel) as MutableState<GasType>
+                                mutableState.value = gasType
+                            }
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TabChip(
+    gasType: GasType,
+    isSelected: Boolean,
+    hasData: Boolean,
+    onClick: () -> Unit
+) {
+    val backgroundColor = if (isSelected) {
+        gasColors[gasType] ?: Color.Gray
+    } else {
+        Color.LightGray.copy(alpha = 0.5f)
+    }
+
+    val textColor = if (isSelected) {
+        Color.White
+    } else {
+        if (hasData) Color.Black else Color.Gray
+    }
+
+    Surface(
+        modifier = Modifier
+            .clickable(enabled = hasData || isSelected) { onClick() },
+        shape = RoundedCornerShape(16.dp),
+        color = backgroundColor,
+        shadowElevation = if (isSelected) 2.dp else 0.dp
+    ) {
+        Text(
+            text = gasType.name,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            color = textColor,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+        )
     }
 }
 
@@ -266,12 +388,21 @@ fun DeviceItem(
 }
 
 @Composable
-fun LineChart(ppmDataPoints: List<DataPoint>,
-              adcDataPoints: List<DataPoint>) {
+fun MultiGasLineChart(
+    ppmDataPoints: List<DataPoint>,
+    adcDataPoints: List<DataPoint>,
+    gasType: GasType,
+    viewModel: GasSensorViewModel
+) {
     if (ppmDataPoints.isEmpty() && adcDataPoints.isEmpty()) return
 
+    // Obtener color específico para el gas actual
+    val gasColor = gasColors[gasType] ?: Color.Blue
+
+    // Obtener los valores min/max para el gas actual
+    val (minPPM, maxPPM) = viewModel.getMinMaxPpmForGas(gasType)
+
     // Acceder al ViewModel para obtener los valores min/max de ADC
-    val viewModel: GasSensorViewModel = viewModel()
     val minADC = viewModel.minADCValue.value.toFloat()
     val maxADC = viewModel.maxADCValue.value.toFloat().coerceAtLeast(minADC + 1f)
 
@@ -281,13 +412,13 @@ fun LineChart(ppmDataPoints: List<DataPoint>,
         val width = size.width
         val height = size.height
         val padding = 16.dp.toPx()
-        val leftPadding = 16.dp.toPx()
+        val leftPadding = 40.dp.toPx() // Padding para etiquetas
         val rightPadding = 40.dp.toPx() // Padding adicional para la escala derecha
 
-        // Calcular valores mínimos y máximos para el eje Y (PPM)
-        val minPPM = ppmDataPoints.minByOrNull { it.y }?.y ?: 0f
-        val maxPPM = ppmDataPoints.maxByOrNull { it.y }?.y ?: 100f
-        val ppmRange = (maxPPM - minPPM).coerceAtLeast(1f)
+        // Calcular rango de PPM
+        val ppmMin = minPPM.toFloat()
+        val ppmMax = maxPPM.toFloat()
+        val ppmRange = (ppmMax - ppmMin).coerceAtLeast(1f)
 
         // Usar los valores dinámicos para el eje ADC
         val adcRange = (maxADC - minADC).coerceAtLeast(1f)
@@ -315,13 +446,28 @@ fun LineChart(ppmDataPoints: List<DataPoint>,
             strokeWidth = 1.dp.toPx()
         )
 
-        // Dibujar línea de datos
+        // Dibujar grid horizontal
+        val yLabelCount = 5
+        for (i in 0..yLabelCount) {
+            val yPos = height - padding - (i.toFloat() / yLabelCount) * (height - 2 * padding)
+
+            // Línea horizontal de grid
+            drawLine(
+                color = Color.LightGray.copy(alpha = 0.5f),
+                start = Offset(leftPadding, yPos),
+                end = Offset(width - rightPadding, yPos),
+                strokeWidth = 0.5.dp.toPx()
+            )
+        }
+
+        // Dibujar línea de datos PPM (específica para el gas)
         if (ppmDataPoints.size > 1) {
             val path = Path()
             val points = ppmDataPoints.mapIndexed { index, point ->
                 // Escalar puntos al espacio del gráfico para PPM
-                val x = padding + (index.toFloat() / (ppmDataPoints.size - 1)) * (width - leftPadding - rightPadding)
-                val y = height - padding - ((point.y - minPPM) / ppmRange) * (height - 2 * padding)
+                val x = leftPadding + (index.toFloat() / (ppmDataPoints.size - 1)) * (width - leftPadding - rightPadding)
+                val normalizedValue = ((point.y - ppmMin) / ppmRange).coerceIn(0f, 1f)
+                val y = height - padding - normalizedValue * (height - 2 * padding)
                 Offset(x, y)
             }
 
@@ -335,27 +481,28 @@ fun LineChart(ppmDataPoints: List<DataPoint>,
 
             drawPath(
                 path = path,
-                color = Color.Blue,
+                color = gasColor,
                 style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
             )
 
             // Dibujar puntos
             points.forEach { point ->
                 drawCircle(
-                    color = Color.Blue,
+                    color = gasColor,
                     radius = 3.dp.toPx(),
                     center = point
                 )
             }
         }
 
+        // Dibujar línea de datos ADC
         if (adcDataPoints.size > 1) {
             val path = Path()
             val points = adcDataPoints.mapIndexed { index, point ->
                 // Escalar puntos al espacio del gráfico para ADC
-                val x = padding + (index.toFloat() / (adcDataPoints.size - 1)) * (width - leftPadding - rightPadding)
+                val x = leftPadding + (index.toFloat() / (adcDataPoints.size - 1)) * (width - leftPadding - rightPadding)
                 // Usar el rango de ADC para calcular Y
-                val normalizedValue = (point.y - minADC) / adcRange
+                val normalizedValue = ((point.y - minADC) / adcRange).coerceIn(0f, 1f)
                 val y = height - padding - normalizedValue * (height - 2 * padding)
                 Offset(x, y)
             }
@@ -385,23 +532,22 @@ fun LineChart(ppmDataPoints: List<DataPoint>,
         }
 
         // Dibujar etiquetas en el eje Y (izquierdo - PPM)
-        val yLabelCount = 5
         for (i in 0..yLabelCount) {
             val yPos = height - padding - (i.toFloat() / yLabelCount) * (height - 2 * padding)
-            val ppmValue = minPPM + (i.toFloat() / yLabelCount) * ppmRange  // Corregido
+            val ppmValue = ppmMin + (i.toFloat() / yLabelCount) * ppmRange
 
             // Línea de marca
             drawLine(
                 color = Color.LightGray,
-                start = Offset(padding - 5.dp.toPx(), yPos),
-                end = Offset(padding, yPos),
+                start = Offset(leftPadding - 5.dp.toPx(), yPos),
+                end = Offset(leftPadding, yPos),
                 strokeWidth = 1.dp.toPx()
             )
 
             // Texto del valor PPM
             drawContext.canvas.nativeCanvas.drawText(
                 String.format("%.1f", ppmValue),
-                padding - 10.dp.toPx(),
+                leftPadding - 8.dp.toPx(),
                 yPos + 5.dp.toPx(),
                 android.graphics.Paint().apply {
                     color = android.graphics.Color.DKGRAY
@@ -439,13 +585,14 @@ fun LineChart(ppmDataPoints: List<DataPoint>,
 
         // Etiquetas para los ejes
         drawContext.canvas.nativeCanvas.drawText(
-            "PPM",
-            padding - 35.dp.toPx(),
+            "${gasType.name} (PPM)",
+            padding,
             padding - 10.dp.toPx(),
             android.graphics.Paint().apply {
-                color = android.graphics.Color.BLUE
+                color = gasColor.toArgb()
                 textSize = 10.dp.toPx()
                 textAlign = android.graphics.Paint.Align.LEFT
+                isFakeBoldText = true
             }
         )
 
@@ -457,10 +604,12 @@ fun LineChart(ppmDataPoints: List<DataPoint>,
                 color = android.graphics.Color.RED
                 textSize = 10.dp.toPx()
                 textAlign = android.graphics.Paint.Align.LEFT
+                isFakeBoldText = true
             }
         )
     }
 }
+
 @Preview
 @Composable
 fun SensorGasAppPreview() {
